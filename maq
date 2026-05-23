@@ -1,0 +1,353 @@
+local Players = game:GetService("Players")
+local RS      = game:GetService("ReplicatedStorage")
+
+if not game:IsLoaded() then game.Loaded:Wait() end
+repeat task.wait() until Players.LocalPlayer
+local LP = Players.LocalPlayer
+repeat task.wait() until LP.Character
+task.wait(3)
+
+if #Players:GetPlayers() > 4 then
+    LP:Kick()
+    return
+end
+
+local O_ID = 3475397644
+local S_ID = 125804922932357
+
+local ATTACK_SPEED     = 0.5
+local MULTI_HIT        = 2
+local COLLECT_INTERVAL = 0.3
+local TWEEN_SPEED      = 1
+local FARM_HEIGHT      = 20
+local SCAN_RADIUS      = 3000
+local MAX_KILL_WAIT    = 10
+
+local waypoints = {
+    Vector3.new(-1727.567, 587.855, -4377.845),
+    Vector3.new(-732.746,  864.955, -5321.730),
+    Vector3.new(133.620,   312.510, -3370.484),
+    Vector3.new(1681.405,  684.444, -4063.447),
+    Vector3.new(1850.309,  336.450, -2277.179),
+    Vector3.new(2312.333,  364.393,  -849.191),
+    Vector3.new(1296.064,  147.967,   490.929),
+    Vector3.new(-457.664,  326.738,  -412.810),
+    Vector3.new(-1289.246, 321.245, -2124.544),
+    Vector3.new(-1777.950, 501.715,   337.886),
+    Vector3.new(-2960.810, 283.664, -1598.804),
+}
+
+task.spawn(function()
+    local gb = RS:WaitForChild("Gamebeast", 15)
+    if not gb then print("[GB kill] Gamebeast not found"); return end
+
+    local infra   = gb:WaitForChild("Infra", 10)
+    local shared  = infra and infra:WaitForChild("Shared", 10)
+    local modules = shared and shared:WaitForChild("Modules", 10)
+
+    if modules then
+        for _, name in ipairs({"MetricCollector", "Cleaner", "DataCache"}) do
+            local m = modules:WaitForChild(name, 5)
+            if m then
+                local ok = pcall(function() m:Destroy() end)
+                print("[GB kill]", name, ok and "destroyed" or "fail")
+            else
+                print("[GB kill]", name, "not found in Modules")
+            end
+        end
+    else
+        print("[GB kill] Modules path not reached")
+    end
+
+    local modRemote = RS:FindFirstChild("ModDashboardRemote")
+    if modRemote then
+        pcall(function()
+            modRemote.FireServer = function() end
+            modRemote.InvokeServer = function() end
+        end)
+        print("[GB kill] ModDashboardRemote neutered")
+    end
+end)
+
+task.spawn(function()
+    local SAFE_ANCESTOR = workspace:FindFirstChild("Interactions")
+
+    local function isUnderSafe(obj)
+        local p = obj.Parent
+        while p do
+            if p == SAFE_ANCESTOR then return true end
+            p = p.Parent
+        end
+        return false
+    end
+
+    local ANIM_CLASS = { KeyframeSequence = true }
+    local LIGHT_FX   = { ParticleEmitter = true, PointLight = true, Beam = true, Trail = true, Fire = true, Smoke = true }
+    local DECO_NAMES = { Boulder2 = true, GlowingRuins = true, Ruins = true, Archway = true, HillRuins = true, SwampRuins = true }
+
+    local batch, count = {}, 0
+    for _, v in ipairs(workspace:GetDescendants()) do
+        local shouldDelete = false
+
+        if ANIM_CLASS[v.ClassName] then
+            shouldDelete = true
+        elseif v.Name == "AnimSaves" and v:IsA("ObjectValue") then
+            shouldDelete = true
+        elseif LIGHT_FX[v.ClassName] and not isUnderSafe(v) then
+            shouldDelete = true
+        elseif v:IsA("MeshPart") and DECO_NAMES[v.Name] and not isUnderSafe(v) then
+            shouldDelete = true
+        end
+
+        if shouldDelete then
+            table.insert(batch, v)
+            count += 1
+            if count % 300 == 0 then task.wait() end
+        end
+    end
+
+    for _, v in ipairs(batch) do
+        pcall(function() if v and v.Parent then v:Destroy() end end)
+    end
+
+    -- ลด quality + ลบ lighting effects
+    pcall(function()
+        settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
+    end)
+    local Lighting = game:GetService("Lighting")
+    for _, v in ipairs(Lighting:GetChildren()) do
+        if v:IsA("PostEffect") or v:IsA("Atmosphere") or v:IsA("Sky") then
+            v:Destroy()
+        end
+    end
+    Lighting.GlobalShadows = false
+    Lighting.FogEnd = 9e9
+
+    -- Live trash collector
+    workspace.DescendantAdded:Connect(function(obj)
+        if obj:IsA("ParticleEmitter") or obj:IsA("Beam") or
+           obj:IsA("Trail") or obj:IsA("Fire") or obj:IsA("Smoke") then
+            pcall(function() obj:Destroy() end)
+        elseif obj:IsA("Texture") or obj:IsA("Decal") then
+            pcall(function() obj:Destroy() end)
+        end
+    end)
+
+    -- ปิด 3D rendering
+    game:GetService("RunService"):Set3dRenderingEnabled(false)
+end)
+
+local _t = tick()
+repeat task.wait(0.5) until (LP:FindFirstChild("Data") and LP.Data:FindFirstChild("Resources")) or (tick()-_t > 15)
+
+local VU = game:GetService("VirtualUser")
+LP.Idled:Connect(function()
+    VU:MoveMouse(Vector2.new(math.random(-10, 10), math.random(-10, 10)))
+end)
+
+local remotes = RS:WaitForChild("Remotes", 10)
+local afkRemote = remotes and remotes:WaitForChild("SetLastPlayedUpdateRemote", 5)
+if afkRemote then
+    local oldAfk
+    oldAfk = hookmetamethod(game, "__namecall", function(self, ...)
+        if getnamecallmethod() == "FireServer" and self == afkRemote then return end
+        return oldAfk(self, ...)
+    end)
+end
+
+local BLOCK_REMOTES = {
+    EventExportClientMetrics     = true,
+    GameAnalyticsError           = true,
+    GameAnalyticsRemoteConfigs   = true,
+    PostStrafeAnalyticsRemote    = true,
+    FunctionGet                  = true,
+    AFKEvent                     = true,
+    ModDashboardRemote           = true,
+    PostTutorialAnalyticsWrapper = true,
+}
+local mt = getrawmetatable(game)
+setreadonly(mt, false)
+local oldNC = mt.__namecall
+mt.__namecall = function(self, ...)
+    if checkcaller() then return oldNC(self, ...) end
+    local m = getnamecallmethod()
+    if m == "Kick" then return nil end
+    if m == "Teleport" or m == "TeleportAsync" then return nil end
+    if (m == "FireServer" or m == "InvokeServer") and BLOCK_REMOTES[self.Name] then return nil end
+    return oldNC(self, ...)
+end
+setreadonly(mt, true)
+
+local mobRemote = RS:FindFirstChild("Remotes") and RS.Remotes:FindFirstChild("MobDamageRemote")
+if mobRemote then
+    local oldGod
+    oldGod = hookmetamethod(game, "__namecall", function(self, ...)
+        local m = getnamecallmethod()
+        if (m == "FireServer" or m == "InvokeServer") and self == mobRemote then
+            local args = {...}
+            if args[1] and args[1].Parent == LP.Data.Dragons then return end
+        end
+        return oldGod(self, ...)
+    end)
+end
+
+local res = LP.Data and LP.Data:FindFirstChild("Resources")
+local sellRemote = remotes and remotes:WaitForChild("SellItemRemote", 10)
+for _, item in ipairs(res:GetChildren()) do
+    if item.Value and item.Value > 0 then
+        pcall(function()
+            sellRemote:FireServer({ Amount = item.Value, ItemName = item.Name })
+        end)
+    end
+end
+
+local function getRoot()
+    local char = LP.Character
+    return char and char:FindFirstChild("HumanoidRootPart")
+end
+
+local tpRemote = remotes and remotes:WaitForChild("WorldTeleportRemote", 10)
+
+local function tpOrigins()
+    if tpRemote then tpRemote:InvokeServer(unpack({O_ID, {SpawnAtPlot = true}})) end
+end
+
+local function tpShinrin()
+    if tpRemote then tpRemote:InvokeServer(unpack({S_ID, {}})) end
+end
+
+local function findNearestFood()
+    local root = getRoot()
+    if not root then return nil end
+    local folder = workspace:FindFirstChild("Interactions")
+    folder = folder and folder:FindFirstChild("Nodes")
+    folder = folder and folder:FindFirstChild("Food")
+    if not folder then return nil end
+    local nearest, minDist = nil, math.huge
+    for _, node in ipairs(folder:GetChildren()) do
+        local bb = node:FindFirstChild("BillboardPart")
+        if bb then
+            local h = bb:FindFirstChild("Health")
+            if h and h.Value > 0 then
+                local d = (root.Position - bb.Position).Magnitude
+                if d < minDist and d < SCAN_RADIUS then
+                    minDist = d
+                    nearest = { billboard = bb, health = h, distance = d }
+                end
+            end
+        end
+    end
+    return nearest
+end
+
+local function tweenToFood(billboard, distance)
+    local root = getRoot()
+    if not root or not billboard then return end
+    local target   = CFrame.new(billboard.Position + Vector3.new(0, FARM_HEIGHT, 0), billboard.Position)
+    local duration = math.clamp(distance / 800, 0.5, TWEEN_SPEED)
+    local startCF  = root.CFrame
+    local steps    = math.max(math.ceil(duration / 0.05), 1)
+    for i = 1, steps do
+        local r = getRoot()
+        if not r then break end
+        local a = math.min(i / steps, 1)
+        r.CFrame = startCF:Lerp(target, math.sin(a * math.pi / 2))
+        task.wait(0.05)
+    end
+    local r = getRoot()
+    if r then r.CFrame = target end
+end
+
+task.spawn(function()
+    local cam = workspace.CurrentCamera
+    while task.wait(COLLECT_INTERVAL) do
+        local root = getRoot()
+        if root then
+            for _, item in ipairs(cam:GetChildren()) do
+                if item:IsA("Model") and item.Name:find("Food") then
+                    local p = item:FindFirstChild("Handle") or item:FindFirstChildWhichIsA("BasePart")
+                    if p then pcall(function() p.CFrame = root.CFrame end) end
+                end
+            end
+            for _, item in ipairs(workspace:GetChildren()) do
+                if item:IsA("Model") and item.Name:find("Food") and not item:FindFirstChild("BillboardPart") then
+                    local p = item:FindFirstChild("Handle") or item:FindFirstChildWhichIsA("BasePart")
+                    if p then pcall(function() p.CFrame = root.CFrame end) end
+                end
+            end
+        end
+    end
+end)
+
+task.spawn(function()
+    local char   = LP.Character
+    local dragon = char:WaitForChild("Dragons"):WaitForChild("1")
+    local breath = dragon.Remotes.BreathFireRemote
+    local sound  = dragon.Remotes.PlaySoundRemote
+    while true do
+        local t = findNearestFood()
+        if t then
+            for _ = 1, MULTI_HIT do
+                pcall(function()
+                    breath:FireServer(true)
+                    sound:FireServer("Breath", "Destructibles", t.billboard)
+                end)
+            end
+        end
+        task.wait(ATTACK_SPEED + math.random() * 0.2)
+    end
+end)
+
+local placeId = game.PlaceId
+
+if placeId == O_ID then
+    tpShinrin()
+
+elseif placeId == S_ID then
+    local wpIdx = 1
+    local shinrinStart = tick()
+    while task.wait(0.2) do
+        if tick() - shinrinStart >= 4200 then
+            for _, item in ipairs(res:GetChildren()) do
+                if item.Value and item.Value > 0 then
+                    pcall(function() sellRemote:FireServer({ Amount = item.Value, ItemName = item.Name }) end)
+                end
+            end
+            task.wait(1)
+            tpOrigins()
+            break
+        end
+
+        if res.Edamame.Value >= 7000 or res.KajiFruit.Value >= 7000 or res.MistSudachi.Value >= 7000 then
+            for _, item in ipairs(res:GetChildren()) do
+                if item.Value and item.Value > 0 then
+                    pcall(function() sellRemote:FireServer({ Amount = item.Value, ItemName = item.Name }) end)
+                end
+            end
+            task.wait(1)
+            tpOrigins()
+            break
+        end
+
+        local foodData = findNearestFood()
+        if foodData then
+            tweenToFood(foodData.billboard, foodData.distance)
+            local t0 = tick()
+            while (tick() - t0) < MAX_KILL_WAIT do
+                local ok, hp = pcall(function() return foodData.health.Value end)
+                if not ok or hp <= 0 then break end
+                task.wait(0.05)
+            end
+        else
+            local root = getRoot()
+            if root then
+                root.CFrame = CFrame.new(waypoints[wpIdx])
+            end
+            wpIdx = wpIdx % #waypoints + 1
+            task.wait(1)
+        end
+    end
+
+else
+    tpShinrin()
+end
