@@ -318,7 +318,7 @@ elseif placeId == S_ID then
             break
         end
 
-        if res.Edamame.Value >= 7000 or res.KajiFruit.Value >= 7000 or res.MistSudachi.Value >= 7000 then
+        if res.Edamame.Value >= 4200 or res.KajiFruit.Value >= 4200 or res.MistSudachi.Value >= 4200 then
             for _, item in ipairs(res:GetChildren()) do
                 if item.Value and item.Value > 0 then
                     pcall(function() sellRemote:FireServer({ Amount = item.Value, ItemName = item.Name }) end)
