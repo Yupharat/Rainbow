@@ -91,7 +91,7 @@ while true do
         tpTo(highest)
         task.wait(5)  -- รอ place load (ถ้า TP ไม่ kick ออก)
     else
-        loadstring(game:HttpGet("loadstring(game:HttpGet("https://raw.githubusercontent.com/Yupharat/Rainbow/main/ca"))()
+        loadstring(game:HttpGet("https://raw.githubusercontent.com/Yupharat/Rainbow/main/ca"))()
 "))()
 
         while true do
