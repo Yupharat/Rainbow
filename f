@@ -92,7 +92,6 @@ while true do
         task.wait(5)  -- รอ place load (ถ้า TP ไม่ kick ออก)
     else
         loadstring(game:HttpGet("https://raw.githubusercontent.com/Yupharat/Rainbow/main/ca"))()
-"))()
 
         while true do
             local newHighest = getHighest()
