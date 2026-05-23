@@ -1,3 +1,6 @@
+-- ORIGINAL main.lua (ก่อน Claude แก้ใดๆ)
+-- backup snapshot: pre-edit baseline
+
 local Players = game:GetService("Players")
 local RS      = game:GetService("ReplicatedStorage")
 
@@ -36,38 +39,6 @@ local waypoints = {
     Vector3.new(-1777.950, 501.715,   337.886),
     Vector3.new(-2960.810, 283.664, -1598.804),
 }
-
-task.spawn(function()
-    local gb = RS:WaitForChild("Gamebeast", 15)
-    if not gb then print("[GB kill] Gamebeast not found"); return end
-
-    local infra   = gb:WaitForChild("Infra", 10)
-    local shared  = infra and infra:WaitForChild("Shared", 10)
-    local modules = shared and shared:WaitForChild("Modules", 10)
-
-    if modules then
-        for _, name in ipairs({"MetricCollector", "Cleaner", "DataCache"}) do
-            local m = modules:WaitForChild(name, 5)
-            if m then
-                local ok = pcall(function() m:Destroy() end)
-                print("[GB kill]", name, ok and "destroyed" or "fail")
-            else
-                print("[GB kill]", name, "not found in Modules")
-            end
-        end
-    else
-        print("[GB kill] Modules path not reached")
-    end
-
-    local modRemote = RS:FindFirstChild("ModDashboardRemote")
-    if modRemote then
-        pcall(function()
-            modRemote.FireServer = function() end
-            modRemote.InvokeServer = function() end
-        end)
-        print("[GB kill] ModDashboardRemote neutered")
-    end
-end)
 
 task.spawn(function()
     local SAFE_ANCESTOR = workspace:FindFirstChild("Interactions")
@@ -156,14 +127,12 @@ if afkRemote then
 end
 
 local BLOCK_REMOTES = {
-    EventExportClientMetrics     = true,
-    GameAnalyticsError           = true,
-    GameAnalyticsRemoteConfigs   = true,
-    PostStrafeAnalyticsRemote    = true,
-    FunctionGet                  = true,
-    AFKEvent                     = true,
-    ModDashboardRemote           = true,
-    PostTutorialAnalyticsWrapper = true,
+    EventExportClientMetrics   = true,
+    GameAnalyticsError         = true,
+    GameAnalyticsRemoteConfigs = true,
+    PostStrafeAnalyticsRemote  = true,
+    FunctionGet                = true,
+    AFKEvent                   = true,
 }
 local mt = getrawmetatable(game)
 setreadonly(mt, false)
