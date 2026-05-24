@@ -1,5 +1,5 @@
--- ORIGINAL main.lua (ก่อน Claude แก้ใดๆ)
--- backup snapshot: pre-edit baseline
+-- Histo edition — Prehistoric farm (port จาก Shinrin)
+-- snapshot: pre-edit baseline
 
 local Players = game:GetService("Players")
 local RS      = game:GetService("ReplicatedStorage")
@@ -16,10 +16,10 @@ if #Players:GetPlayers() > 4 then
 end
 
 local O_ID = 3475397644
-local S_ID = 125804922932357
+local P_ID = 4869039553   -- Prehistoric
 
-local ATTACK_SPEED     = 0.5
-local MULTI_HIT        = 2
+local ATTACK_SPEED     = 1
+local MULTI_HIT        = 1
 local COLLECT_INTERVAL = 0.3
 local TWEEN_SPEED      = 1
 local FARM_HEIGHT      = 20
@@ -27,17 +27,20 @@ local SCAN_RADIUS      = 3000
 local MAX_KILL_WAIT    = 10
 
 local waypoints = {
-    Vector3.new(-1727.567, 587.855, -4377.845),
-    Vector3.new(-732.746,  864.955, -5321.730),
-    Vector3.new(133.620,   312.510, -3370.484),
-    Vector3.new(1681.405,  684.444, -4063.447),
-    Vector3.new(1850.309,  336.450, -2277.179),
-    Vector3.new(2312.333,  364.393,  -849.191),
-    Vector3.new(1296.064,  147.967,   490.929),
-    Vector3.new(-457.664,  326.738,  -412.810),
-    Vector3.new(-1289.246, 321.245, -2124.544),
-    Vector3.new(-1777.950, 501.715,   337.886),
-    Vector3.new(-2960.810, 283.664, -1598.804),
+    Vector3.new(-256.833, 419.179,  -897.406),
+    Vector3.new( 287.326, 576.588,  -636.841),
+    Vector3.new( 279.931, 503.467,  -419.733),
+    Vector3.new(1159.055, 484.596,  1003.182),
+    Vector3.new(1604.768, 308.508,  1021.327),
+    Vector3.new(2290.486, 488.393,  -182.440),
+    Vector3.new(1009.589, 579.484,  -951.616),
+    Vector3.new( 854.238, 336.516, -1639.776),
+    Vector3.new( 198.084, 563.870, -2109.927),
+    Vector3.new(-817.540, 408.447, -1747.207),
+    Vector3.new(-630.286, 753.859,  -144.211),
+    Vector3.new(-819.596, 330.707,   -86.851),
+    Vector3.new(-607.500, 394.889,   261.084),
+    Vector3.new(-724.563,  28.387,   610.657),
 }
 
 task.spawn(function()
@@ -81,7 +84,6 @@ task.spawn(function()
         pcall(function() if v and v.Parent then v:Destroy() end end)
     end
 
-    -- ลด quality + ลบ lighting effects
     pcall(function()
         settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
     end)
@@ -94,7 +96,6 @@ task.spawn(function()
     Lighting.GlobalShadows = false
     Lighting.FogEnd = 9e9
 
-    -- Live trash collector
     workspace.DescendantAdded:Connect(function(obj)
         if obj:IsA("ParticleEmitter") or obj:IsA("Beam") or
            obj:IsA("Trail") or obj:IsA("Fire") or obj:IsA("Smoke") then
@@ -104,7 +105,6 @@ task.spawn(function()
         end
     end)
 
-    -- ปิด 3D rendering
     game:GetService("RunService"):Set3dRenderingEnabled(false)
 end)
 
@@ -181,8 +181,8 @@ local function tpOrigins()
     if tpRemote then tpRemote:InvokeServer(unpack({O_ID, {SpawnAtPlot = true}})) end
 end
 
-local function tpShinrin()
-    if tpRemote then tpRemote:InvokeServer(unpack({S_ID, {}})) end
+local function tpPrehistoric()
+    if tpRemote then tpRemote:InvokeServer(unpack({P_ID, {}})) end
 end
 
 local function findNearestFood()
@@ -270,13 +270,13 @@ end)
 local placeId = game.PlaceId
 
 if placeId == O_ID then
-    tpShinrin()
+    tpPrehistoric()
 
-elseif placeId == S_ID then
+elseif placeId == P_ID then
     local wpIdx = 1
-    local shinrinStart = tick()
+    local preStart = tick()
     while task.wait(0.2) do
-        if tick() - shinrinStart >= 4200 then
+        if tick() - preStart >= 4200 then
             for _, item in ipairs(res:GetChildren()) do
                 if item.Value and item.Value > 0 then
                     pcall(function() sellRemote:FireServer({ Amount = item.Value, ItemName = item.Name }) end)
@@ -287,7 +287,7 @@ elseif placeId == S_ID then
             break
         end
 
-        if res.Edamame.Value >= 3000 or res.KajiFruit.Value >= 3000 or res.MistSudachi.Value >= 3000 then
+        if res.Coconut.Value >= 10000 or res.Avacado.Value >= 10000 or res.CacaoBean.Value >= 10000 then
             for _, item in ipairs(res:GetChildren()) do
                 if item.Value and item.Value > 0 then
                     pcall(function() sellRemote:FireServer({ Amount = item.Value, ItemName = item.Name }) end)
@@ -318,5 +318,5 @@ elseif placeId == S_ID then
     end
 
 else
-    tpShinrin()
+    tpPrehistoric()
 end
