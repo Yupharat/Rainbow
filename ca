@@ -121,70 +121,6 @@ local function getMobHitPart(mobRoot)
     return nil
 end
 
-----------------------------------------------------
--- DRAGON MOUNT (Sonar — cached + check ผ่าน CurrentDragon)
--- isMounted ใช้ client.CurrentDragon (dump line 209172 — set/clear ตาม SeatChangedSignal)
-----------------------------------------------------
-local _SonarMod, _PW, _DCC, _DS, _RU
-local function _loadSonar()
-    if _SonarMod then return true end
-    local okS, Sonar = pcall(require, RS:WaitForChild("Sonar", 10))
-    if not okS or not Sonar then return false end
-    local okMod, PW, DCC, DS, RU = pcall(function()
-        return Sonar("PlayerWrapper"), Sonar("DragonClassClient"),
-               Sonar("DragonService"),  Sonar("RemoteUtils")
-    end)
-    if not okMod then return false end
-    _SonarMod, _PW, _DCC, _DS, _RU = Sonar, PW, DCC, DS, RU
-    return true
-end
-
-local function isMounted()
-    if not _loadSonar() then return false end
-    local client = _PW.GetClient()
-    return client ~= nil and client.CurrentDragon ~= nil
-end
-
-local function mountDragon()
-    if not _loadSonar() then warn("[mount] Sonar load fail") return false end
-    local client = _PW.GetClient()
-    pcall(function() client:yieldForCharacter() end)
-
-    local dragonVal = client.PlayerData
-        and client.PlayerData:FindFirstChild("Dragons")
-        and client.PlayerData.Dragons:FindFirstChild("1")
-    if not dragonVal then warn("[mount] ไม่เจอ dragon slot 1") return false end
-
-    if _DS.IsDragonDead(dragonVal) then warn("[mount] dragon dead") return false end
-
-    -- ★ ถ้า dragon equipped อยู่แล้ว (มี runtime dragon ใน character) → MountDragonFromValue ตรงๆ
-    --   เพราะ boss instance = unequip zone (CanEquipDragon=false) แต่เพิ่งนั่งตกลง dragon ยังอยู่
-    --   dump line 290025: MountDragonFromValue → getDragonFromDataValue → _sit (ไม่เรียก equip)
-    local char = LP.Character
-    local equipped = char and char:FindFirstChild("Dragons") and char.Dragons:FindFirstChild("1")
-    if equipped then
-        task.spawn(function()
-            pcall(function() _DCC.MountDragonFromValue(dragonVal, true) end)
-        end)
-        return true
-    end
-
-    -- ยังไม่ equipped → ต้อง equip ก่อน (เฉพาะ world ปกติ ที่ CanEquipDragon=true)
-    if not _DS.CanEquipDragon(dragonVal, client) then
-        warn("[mount] CanEquipDragon=false + ไม่มี equipped dragon")
-        return false
-    end
-
-    local EquipRemote = _RU.GetRemoteFunction("EquipDragonRemote")
-    local okE, success = pcall(EquipRemote.InvokeServer, EquipRemote, "1")
-    if not okE or not success then warn("[mount] equip fail") return false end
-
-    task.spawn(function()
-        pcall(function() _DCC.MountDragonFromValue(dragonVal, true) end)
-    end)
-    return true
-end
-
 local function findNearestMobPart()
     local root = getRoot()
     if not root then return nil end
@@ -321,17 +257,14 @@ local function farmHarvest(worldName)
     local COLLECT_INTERVAL = 0.2
     local TWEEN_SPEED      = 1
     local FARM_HEIGHT      = 20
-    local SCAN_RADIUS      = 3000
     local MAX_KILL_WAIT    = 10
 
-    local function findFood()
-        local root = getRoot()
-        if not root then return nil end
-        local folder = workspace:FindFirstChild("Interactions")
-            and workspace.Interactions:FindFirstChild("Nodes")
-            and workspace.Interactions.Nodes:FindFirstChild("Food")
-        if not folder then return nil end
-        local nearest, minDist = nil, math.huge
+    -- ★ Harvest นับทุก LargeHarvestNode pickup (dump line 125433-125437)
+    -- ★ Workspace path: workspace.Interactions.Nodes.{Food,Resources,BoneMeal}
+    --   (dump line 125373-125377 — server tag LargeHarvestNode ทั้ง 4 folder รวม
+    --   CloverCoins แต่ตัวนั้นเป็น event เฉพาะกาล ข้าม)
+    local function scanFolder(folder, root, best)
+        if not folder then return end
         for _, node in ipairs(folder:GetChildren()) do
             local toScan = { node }
             if node:IsA("Folder") then
@@ -345,15 +278,27 @@ local function farmHarvest(worldName)
                     local h = bb:FindFirstChild("Health")
                     if h and h:IsA("ValueBase") and h.Value > 0 then
                         local d = (root.Position - bb.Position).Magnitude
-                        if d < minDist and d < SCAN_RADIUS then
-                            minDist = d
-                            nearest = { billboard = bb, health = h, distance = d }
+                        if d < best.dist then
+                            best.dist   = d
+                            best.target = { billboard = bb, health = h, distance = d }
                         end
                     end
                 end
             end
         end
-        return nearest
+    end
+
+    local function findFood()
+        local root = getRoot()
+        if not root then return nil end
+        local nodes = workspace:FindFirstChild("Interactions")
+            and workspace.Interactions:FindFirstChild("Nodes")
+        if not nodes then return nil end
+        local best = { target = nil, dist = math.huge }
+        scanFolder(nodes:FindFirstChild("Food"),      root, best)
+        scanFolder(nodes:FindFirstChild("Resources"), root, best)
+        scanFolder(nodes:FindFirstChild("BoneMeal"),  root, best)
+        return best.target
     end
 
     local function tweenTo(billboard, distance)
@@ -415,7 +360,8 @@ local function farmHarvest(worldName)
         end
     end)
 
-    -- main loop
+    -- main loop — scan ทั้ง Food + Resources + BoneMeal global → ถ้าไม่เจอจริงๆ
+    -- (node respawn ระหว่าง SpawnDuration 60s) ก็แค่รอ ไม่ teleport มั่ว
     while not isMissionDone(worldName, "Harvest") do
         local foodData = findFood()
         if foodData then
@@ -427,12 +373,6 @@ local function farmHarvest(worldName)
                 task.wait(0.05)
             end
         else
-            local root = getRoot()
-            if root then
-                local a = math.rad(math.random(0, 360))
-                local d = math.random(300, 800)
-                root.CFrame = CFrame.new(root.Position + Vector3.new(math.cos(a)*d, 0, math.sin(a)*d))
-            end
             task.wait(1)
         end
     end
@@ -550,29 +490,9 @@ local function farmKillBoss(worldName)
         return { model=boss, part=boss.PrimaryPart, name=boss.Name, stage=stageVal and stageVal.Value or 1 }
     end
 
-    -- ★ Stage 2: filter mob ที่อยู่ในระยะ N studs จาก boss (กัน Tundra/world mob)
-    --   stage-2 mobs spawn ใกล้ boss arena, world mobs อยู่ห่าง → distance filter เพียงพอ
-    local STAGE2_ARENA_RADIUS = 200
-    local function findStageMob(bossPos)
-        if not bossPos then return nil end
-        local nearest, minDist = nil, math.huge
-        local function consider(mobRoot)
-            local part = getMobHitPart(mobRoot)
-            if part then
-                local d = (bossPos - part.Position).Magnitude
-                if d < STAGE2_ARENA_RADIUS and d < minDist then
-                    minDist = d
-                    nearest = part
-                end
-            end
-        end
-        local nodes = workspace:FindFirstChild("Interactions")
-            and workspace.Interactions:FindFirstChild("Nodes")
-        local nm = nodes and nodes:FindFirstChild("Mobs")
-        if nm then for _, c in ipairs(nm:GetChildren()) do consider(c) end end
-        local mf = workspace:FindFirstChild("MobFolder")
-        if mf then for _, c in ipairs(mf:GetChildren()) do consider(c) end end
-        return nearest
+    local function findNearestMob_()
+        local part = findNearestMobPart()
+        return part and { part = part } or nil
     end
 
     -- create queue
@@ -603,36 +523,12 @@ local function farmKillBoss(worldName)
     pcall(function() startRemote:InvokeServer() end)
     task.wait(2)
     pcall(function() tpRemote:InvokeServer("ToBossInstance", {FightId=myFightId, Spawn=true}) end)
-
-    -- ★ รอ boss model + character respawn เสร็จ ก่อนเริ่ม attack loop (timeout 3s)
-    print("🕐 รอ boss instance + character load...")
-    local _bt = tick()
-    while tick() - _bt < 3 do
-        local activeBosses = workspace:FindFirstChild("ActiveBossModels")
-        local boss = activeBosses and activeBosses:FindFirstChild(myFightId)
-        local root = getRoot()
-        if boss and boss.PrimaryPart and root and root.Parent then
-            print(("✅ Boss + character ready (%.1fs)"):format(tick() - _bt))
-            break
-        end
-        task.wait(0.3)
-    end
+    task.wait(3)
 
     -- auto attack (เหมือน standalone)
     local currentTarget    = nil
     local currentTargetType = "Bosses"
     local stopped = false
-
-    -- ★ Auto-remount loop: เช็คทุก 1.5s ถ้าตกมังกร (CurrentDragon == nil) → mount ใหม่
-    task.spawn(function()
-        while not stopped do
-            task.wait(1.5)
-            if not isMounted() then
-                print("⚠ ตกมังกร → remount")
-                mountDragon()
-            end
-        end
-    end)
 
     task.spawn(function()
         repeat task.wait(0.1) until LP.Character
@@ -667,11 +563,10 @@ local function farmKillBoss(worldName)
                     lastStage = bossData.stage
                 end
                 if bossData.stage == 2 then
-                    -- ★ scan เฉพาะ stage mob ใกล้บอส (กัน Tundra wild mob)
-                    local mob = findStageMob(bossData.part.Position)
-                    if mob then
-                        root.CFrame = CFrame.new(mob.Position + Vector3.new(0,10,0), mob.Position)
-                        currentTarget     = { part = mob }
+                    local mobData = findNearestMob_()
+                    if mobData then
+                        root.CFrame = CFrame.new(mobData.part.Position + Vector3.new(0,10,0), mobData.part.Position)
+                        currentTarget     = mobData
                         currentTargetType = "Mobs"
                         task.wait(1)
                     else
@@ -971,12 +866,205 @@ if not worldName then
 end
 print("🌍 World:", worldName)
 
--- Grassland: equip + mount slot 1 (ใช้ฟังก์ชั่นกลาง mountDragon ที่เรียกซ้ำได้)
+-- Grassland: equip dragon แล้วนั่ง (ใช้ flow เดียวกับเกม — DragonAutoEquipClient)
 if worldName == "Grassland" then
-    if mountDragon() then
-        print("🐉 Dragon equipped & seated")
+    local okS, Sonar = pcall(require, RS:WaitForChild("Sonar", 10))
+    if okS and Sonar then
+        local okMod, PlayerWrapper, DragonClassClient, DragonService, RemoteUtils = pcall(function()
+            return Sonar("PlayerWrapper"), Sonar("DragonClassClient"),
+                   Sonar("DragonService"),  Sonar("RemoteUtils")
+        end)
+        if okMod then
+            local client = PlayerWrapper.GetClient()
+            pcall(function() client:yieldForCharacter() end)
+            task.wait(1)
+            local dragonVal = client.PlayerData
+                and client.PlayerData:FindFirstChild("Dragons")
+                and client.PlayerData.Dragons:FindFirstChild("1")
+            if dragonVal and DragonService.CanEquipDragon(dragonVal, client) then
+                local EquipRemote = RemoteUtils.GetRemoteFunction("EquipDragonRemote")
+                local okE, success = pcall(EquipRemote.InvokeServer, EquipRemote, "1")
+                if okE and success and not DragonService.IsDragonDead(dragonVal) then
+                    DragonClassClient.MountDragonFromValue(dragonVal)
+                    print("🐉 Dragon equipped & seated (MountDragonFromValue)")
+                else
+                    warn("[ride] equip fail or dragon dead")
+                end
+            else
+                warn("[ride] no dragon slot 1 or CanEquipDragon=false")
+            end
+        else
+            warn("[ride] load Sonar modules fail")
+        end
     else
-        warn("🐲 mount fail (จะข้าม)")
+        warn("[ride] require Sonar fail")
+    end
+end
+
+----------------------------------------------------
+-- JOIN IRON GUILD (ถ้า Jungle ปลดแล้ว + ยังไม่อยู่ guild)
+----------------------------------------------------
+-- ใช้ SetCurrentGuildRemote (first-time join ฟรี) — ไม่ใช้ SwitchCurrentGuildRemote (เสีย coins)
+-- เงื่อนไข: Jungle ปลดแล้ว = guild war access พร้อม
+do
+    local jungle = LP.Data and LP.Data:FindFirstChild("Worlds") and LP.Data.Worlds:FindFirstChild("Jungle")
+    local jungleUnlocked = jungle and jungle.Value == true
+    if jungleUnlocked then
+        local guild = LP.Data:FindFirstChild("Guild")
+        local current = guild and guild.Value or ""
+        if current == "" then
+            print("🛡️ ยังไม่อยู่ guild → join Iron")
+            local remotes = RS:WaitForChild("Remotes", 10)
+            local setRemote = remotes and remotes:FindFirstChild("SetCurrentGuildRemote")
+            if setRemote then
+                local ok, result = pcall(function()
+                    return setRemote:InvokeServer("Iron")
+                end)
+                if ok and result == true then
+                    print("✅ join Iron สำเร็จ")
+                    task.wait(1)
+                else
+                    warn(("⚠ join Iron fail: ok=%s result=%s"):format(tostring(ok), tostring(result)))
+                end
+            else
+                warn("⚠ SetCurrentGuildRemote ไม่เจอ")
+            end
+        else
+            print(("✅ อยู่ guild [%s] แล้ว — skip"):format(current))
+        end
+    end
+end
+
+----------------------------------------------------
+-- AUTO-CLAIM SEASON MISSIONS (Daily/Weekly) — event-driven
+----------------------------------------------------
+-- dump 257556: client.SeasonsData.Missions.{Daily,Weekly}
+-- dump 253403+257516: mission.Completed:GetPropertyChangedSignal("Value") — game pattern
+-- dump 253532: ClaimMissionRemote:InvokeServer(missionType, difficulty, missionName)
+-- เงื่อนไข: ต้องอยู่ guild
+do
+    local guild = LP.Data and LP.Data:FindFirstChild("Guild")
+    local current = guild and guild.Value or ""
+    if current == "" then
+        print("⏭ ไม่อยู่ guild → skip auto-claim season missions")
+    else
+        local okS, Sonar = pcall(require, RS:WaitForChild("Sonar", 10))
+        local PlayerWrapper, RemoteUtils
+        if okS and Sonar then
+            local okMod, pw, ru = pcall(function()
+                return Sonar("PlayerWrapper"), Sonar("RemoteUtils")
+            end)
+            if okMod then PlayerWrapper, RemoteUtils = pw, ru end
+        end
+        local client = PlayerWrapper and PlayerWrapper.GetClient() or nil
+        local claimRemote = RemoteUtils and RemoteUtils.GetRemoteFunction("ClaimMissionRemote") or nil
+
+        if not (client and claimRemote and client.SeasonsData) then
+            warn("⚠ Sonar/SeasonsData/ClaimMissionRemote ไม่พร้อม — skip")
+        else
+            local missionsRoot = client.SeasonsData:FindFirstChild("Missions")
+            local diffVal = client.PlayerData and client.PlayerData:FindFirstChild("Missions")
+                and client.PlayerData.Missions:FindFirstChild("Difficulty")
+
+            local function tryClaim(mission, missionType)
+                local completed = mission:FindFirstChild("Completed")
+                local claimedV  = mission:FindFirstChild("Claimed")
+                if completed and completed.Value and claimedV and not claimedV.Value then
+                    local difficulty = diffVal and diffVal.Value or mission.Parent.Name
+                    local ok, result = pcall(function()
+                        return claimRemote:InvokeServer(missionType, difficulty, mission.Name)
+                    end)
+                    if ok and result then
+                        print(("✅ claimed %s/%s [%s]"):format(missionType, difficulty, mission.Name))
+                    else
+                        warn(("⚠ claim fail %s [%s]: ok=%s result=%s"):format(
+                            missionType, mission.Name, tostring(ok), tostring(result)
+                        ))
+                    end
+                end
+            end
+
+            local function hookMission(mission, missionType)
+                local completed = mission:WaitForChild("Completed", 5)
+                if not completed then return end
+                tryClaim(mission, missionType)   -- เผื่อ completed=true อยู่แล้วตอน hook
+                completed:GetPropertyChangedSignal("Value"):Connect(function()
+                    tryClaim(mission, missionType)
+                end)
+            end
+
+            local function hookFolder(missionType)
+                local folder = missionsRoot and missionsRoot:FindFirstChild(missionType)
+                if not folder then return end
+                for _, m in ipairs(folder:GetChildren()) do
+                    task.spawn(hookMission, m, missionType)
+                end
+                folder.ChildAdded:Connect(function(m) hookMission(m, missionType) end)
+            end
+
+            hookFolder("Daily")
+            hookFolder("Weekly")
+            print("✅ Season mission auto-claim hooked (Daily + Weekly)")
+        end
+    end
+end
+
+----------------------------------------------------
+-- AUTO-CLAIM GUILD TASKS (event-driven, ไม่ polling)
+----------------------------------------------------
+-- Listen Completed:GetPropertyChangedSignal("Value") ของ task ทุกตัวใน PointTasks
+-- → fire ทันทีตอน server set Completed=true → claim ทันที
+-- + ChildAdded ดักจับ task ใหม่ที่ replicate มา (weekly refresh)
+-- เงื่อนไข: ต้องอยู่ guild
+do
+    local guild = LP.Data and LP.Data:FindFirstChild("Guild")
+    local current = guild and guild.Value or ""
+    if current == "" then
+        print("⏭ ไม่อยู่ guild → skip auto-claim guild tasks")
+    else
+        local remotes = RS:WaitForChild("Remotes", 10)
+        local claimRemote = remotes and remotes:FindFirstChild("ClaimGuildTaskRemote")
+        local g  = LP.Data and LP.Data:FindFirstChild("Guild")
+        local pt = g and g:FindFirstChild("PointTasks")
+        if not pt then
+            local gv = LP:FindFirstChild("GuildValue")
+            pt = gv and gv:FindFirstChild("PointTasks")
+        end
+
+        if not (claimRemote and pt) then
+            warn("⚠ ClaimGuildTaskRemote หรือ PointTasks ไม่เจอ — skip")
+        else
+            local function tryClaim(task_)
+                local completed = task_:FindFirstChild("Completed")
+                local claimedV  = task_:FindFirstChild("Claimed")
+                if completed and completed.Value and claimedV and not claimedV.Value then
+                    local ok = pcall(function() claimRemote:InvokeServer(task_.Name) end)
+                    if ok then
+                        print(("✅ claimed guild task [%s]"):format(task_.Name))
+                    else
+                        warn(("⚠ claim guild task [%s] fail"):format(task_.Name))
+                    end
+                end
+            end
+
+            local function hookTask(task_)
+                local completed = task_:WaitForChild("Completed", 5)
+                if not completed then return end
+                tryClaim(task_)   -- เผื่อ completed=true อยู่แล้วตอน hook
+                completed:GetPropertyChangedSignal("Value"):Connect(function()
+                    tryClaim(task_)
+                end)
+            end
+
+            -- hook task ปัจจุบันทุกตัว
+            for _, t in ipairs(pt:GetChildren()) do
+                task.spawn(hookTask, t)
+            end
+            -- ดักจับ task ใหม่ที่ replicate มา (weekly refresh)
+            pt.ChildAdded:Connect(hookTask)
+
+            print(("✅ Guild task auto-claim hooked (%d tasks)"):format(#pt:GetChildren()))
+        end
     end
 end
 
