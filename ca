@@ -155,17 +155,33 @@ local function mountDragon()
         and client.PlayerData.Dragons:FindFirstChild("1")
     if not dragonVal then warn("[mount] ไม่เจอ dragon slot 1") return false end
 
+    if _DS.IsDragonDead(dragonVal) then warn("[mount] dragon dead") return false end
+
+    -- ★ ถ้า dragon equipped อยู่แล้ว (มี runtime dragon ใน character) → MountDragonFromValue ตรงๆ
+    --   เพราะ boss instance = unequip zone (CanEquipDragon=false) แต่เพิ่งนั่งตกลง dragon ยังอยู่
+    --   dump line 290025: MountDragonFromValue → getDragonFromDataValue → _sit (ไม่เรียก equip)
+    local char = LP.Character
+    local equipped = char and char:FindFirstChild("Dragons") and char.Dragons:FindFirstChild("1")
+    if equipped then
+        task.spawn(function()
+            pcall(function() _DCC.MountDragonFromValue(dragonVal, true) end)
+        end)
+        return true
+    end
+
+    -- ยังไม่ equipped → ต้อง equip ก่อน (เฉพาะ world ปกติ ที่ CanEquipDragon=true)
     if not _DS.CanEquipDragon(dragonVal, client) then
-        warn("[mount] CanEquipDragon=false") return false
+        warn("[mount] CanEquipDragon=false + ไม่มี equipped dragon")
+        return false
     end
 
     local EquipRemote = _RU.GetRemoteFunction("EquipDragonRemote")
     local okE, success = pcall(EquipRemote.InvokeServer, EquipRemote, "1")
     if not okE or not success then warn("[mount] equip fail") return false end
 
-    if _DS.IsDragonDead(dragonVal) then warn("[mount] dragon dead") return false end
-
-    _DCC.MountDragonFromValue(dragonVal)
+    task.spawn(function()
+        pcall(function() _DCC.MountDragonFromValue(dragonVal, true) end)
+    end)
     return true
 end
 
