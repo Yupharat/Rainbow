@@ -121,6 +121,54 @@ local function getMobHitPart(mobRoot)
     return nil
 end
 
+----------------------------------------------------
+-- DRAGON MOUNT (Sonar — cached + check ผ่าน CurrentDragon)
+-- isMounted ใช้ client.CurrentDragon (dump line 209172 — set/clear ตาม SeatChangedSignal)
+----------------------------------------------------
+local _SonarMod, _PW, _DCC, _DS, _RU
+local function _loadSonar()
+    if _SonarMod then return true end
+    local okS, Sonar = pcall(require, RS:WaitForChild("Sonar", 10))
+    if not okS or not Sonar then return false end
+    local okMod, PW, DCC, DS, RU = pcall(function()
+        return Sonar("PlayerWrapper"), Sonar("DragonClassClient"),
+               Sonar("DragonService"),  Sonar("RemoteUtils")
+    end)
+    if not okMod then return false end
+    _SonarMod, _PW, _DCC, _DS, _RU = Sonar, PW, DCC, DS, RU
+    return true
+end
+
+local function isMounted()
+    if not _loadSonar() then return false end
+    local client = _PW.GetClient()
+    return client ~= nil and client.CurrentDragon ~= nil
+end
+
+local function mountDragon()
+    if not _loadSonar() then warn("[mount] Sonar load fail") return false end
+    local client = _PW.GetClient()
+    pcall(function() client:yieldForCharacter() end)
+
+    local dragonVal = client.PlayerData
+        and client.PlayerData:FindFirstChild("Dragons")
+        and client.PlayerData.Dragons:FindFirstChild("1")
+    if not dragonVal then warn("[mount] ไม่เจอ dragon slot 1") return false end
+
+    if not _DS.CanEquipDragon(dragonVal, client) then
+        warn("[mount] CanEquipDragon=false") return false
+    end
+
+    local EquipRemote = _RU.GetRemoteFunction("EquipDragonRemote")
+    local okE, success = pcall(EquipRemote.InvokeServer, EquipRemote, "1")
+    if not okE or not success then warn("[mount] equip fail") return false end
+
+    if _DS.IsDragonDead(dragonVal) then warn("[mount] dragon dead") return false end
+
+    _DCC.MountDragonFromValue(dragonVal)
+    return true
+end
+
 local function findNearestMobPart()
     local root = getRoot()
     if not root then return nil end
@@ -540,12 +588,10 @@ local function farmKillBoss(worldName)
     task.wait(2)
     pcall(function() tpRemote:InvokeServer("ToBossInstance", {FightId=myFightId, Spawn=true}) end)
 
-    -- ★ รอ boss model + character respawn เสร็จ ก่อนเริ่ม attack loop
-    --   (TP ไวเกินก่อน boss load → character ตกมังกร / ค้างหน้าโหลด)
-    --   เช็ค ActiveBossModels.<fightId> มี PrimaryPart + character HumanoidRootPart พร้อม
+    -- ★ รอ boss model + character respawn เสร็จ ก่อนเริ่ม attack loop (timeout 3s)
     print("🕐 รอ boss instance + character load...")
     local _bt = tick()
-    while tick() - _bt < 20 do
+    while tick() - _bt < 3 do
         local activeBosses = workspace:FindFirstChild("ActiveBossModels")
         local boss = activeBosses and activeBosses:FindFirstChild(myFightId)
         local root = getRoot()
@@ -553,14 +599,24 @@ local function farmKillBoss(worldName)
             print(("✅ Boss + character ready (%.1fs)"):format(tick() - _bt))
             break
         end
-        task.wait(0.5)
+        task.wait(0.3)
     end
-    task.wait(2)   -- final buffer ให้ทุกอย่าง stable
 
     -- auto attack (เหมือน standalone)
     local currentTarget    = nil
     local currentTargetType = "Bosses"
     local stopped = false
+
+    -- ★ Auto-remount loop: เช็คทุก 1.5s ถ้าตกมังกร (CurrentDragon == nil) → mount ใหม่
+    task.spawn(function()
+        while not stopped do
+            task.wait(1.5)
+            if not isMounted() then
+                print("⚠ ตกมังกร → remount")
+                mountDragon()
+            end
+        end
+    end)
 
     task.spawn(function()
         repeat task.wait(0.1) until LP.Character
@@ -899,38 +955,12 @@ if not worldName then
 end
 print("🌍 World:", worldName)
 
--- Grassland: equip dragon แล้วนั่ง (ใช้ flow เดียวกับเกม — DragonAutoEquipClient)
+-- Grassland: equip + mount slot 1 (ใช้ฟังก์ชั่นกลาง mountDragon ที่เรียกซ้ำได้)
 if worldName == "Grassland" then
-    local okS, Sonar = pcall(require, RS:WaitForChild("Sonar", 10))
-    if okS and Sonar then
-        local okMod, PlayerWrapper, DragonClassClient, DragonService, RemoteUtils = pcall(function()
-            return Sonar("PlayerWrapper"), Sonar("DragonClassClient"),
-                   Sonar("DragonService"),  Sonar("RemoteUtils")
-        end)
-        if okMod then
-            local client = PlayerWrapper.GetClient()
-            pcall(function() client:yieldForCharacter() end)
-            task.wait(1)
-            local dragonVal = client.PlayerData
-                and client.PlayerData:FindFirstChild("Dragons")
-                and client.PlayerData.Dragons:FindFirstChild("1")
-            if dragonVal and DragonService.CanEquipDragon(dragonVal, client) then
-                local EquipRemote = RemoteUtils.GetRemoteFunction("EquipDragonRemote")
-                local okE, success = pcall(EquipRemote.InvokeServer, EquipRemote, "1")
-                if okE and success and not DragonService.IsDragonDead(dragonVal) then
-                    DragonClassClient.MountDragonFromValue(dragonVal)
-                    print("🐉 Dragon equipped & seated (MountDragonFromValue)")
-                else
-                    warn("[ride] equip fail or dragon dead")
-                end
-            else
-                warn("[ride] no dragon slot 1 or CanEquipDragon=false")
-            end
-        else
-            warn("[ride] load Sonar modules fail")
-        end
+    if mountDragon() then
+        print("🐉 Dragon equipped & seated")
     else
-        warn("[ride] require Sonar fail")
+        warn("🐲 mount fail (จะข้าม)")
     end
 end
 
