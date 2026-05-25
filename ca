@@ -486,9 +486,29 @@ local function farmKillBoss(worldName)
         return { model=boss, part=boss.PrimaryPart, name=boss.Name, stage=stageVal and stageVal.Value or 1 }
     end
 
-    local function findNearestMob_()
-        local part = findNearestMobPart()
-        return part and { part = part } or nil
+    -- ★ Stage 2: filter mob ที่อยู่ในระยะ N studs จาก boss (กัน Tundra/world mob)
+    --   stage-2 mobs spawn ใกล้ boss arena, world mobs อยู่ห่าง → distance filter เพียงพอ
+    local STAGE2_ARENA_RADIUS = 200
+    local function findStageMob(bossPos)
+        if not bossPos then return nil end
+        local nearest, minDist = nil, math.huge
+        local function consider(mobRoot)
+            local part = getMobHitPart(mobRoot)
+            if part then
+                local d = (bossPos - part.Position).Magnitude
+                if d < STAGE2_ARENA_RADIUS and d < minDist then
+                    minDist = d
+                    nearest = part
+                end
+            end
+        end
+        local nodes = workspace:FindFirstChild("Interactions")
+            and workspace.Interactions:FindFirstChild("Nodes")
+        local nm = nodes and nodes:FindFirstChild("Mobs")
+        if nm then for _, c in ipairs(nm:GetChildren()) do consider(c) end end
+        local mf = workspace:FindFirstChild("MobFolder")
+        if mf then for _, c in ipairs(mf:GetChildren()) do consider(c) end end
+        return nearest
     end
 
     -- create queue
@@ -519,7 +539,23 @@ local function farmKillBoss(worldName)
     pcall(function() startRemote:InvokeServer() end)
     task.wait(2)
     pcall(function() tpRemote:InvokeServer("ToBossInstance", {FightId=myFightId, Spawn=true}) end)
-    task.wait(3)
+
+    -- ★ รอ boss model + character respawn เสร็จ ก่อนเริ่ม attack loop
+    --   (TP ไวเกินก่อน boss load → character ตกมังกร / ค้างหน้าโหลด)
+    --   เช็ค ActiveBossModels.<fightId> มี PrimaryPart + character HumanoidRootPart พร้อม
+    print("🕐 รอ boss instance + character load...")
+    local _bt = tick()
+    while tick() - _bt < 20 do
+        local activeBosses = workspace:FindFirstChild("ActiveBossModels")
+        local boss = activeBosses and activeBosses:FindFirstChild(myFightId)
+        local root = getRoot()
+        if boss and boss.PrimaryPart and root and root.Parent then
+            print(("✅ Boss + character ready (%.1fs)"):format(tick() - _bt))
+            break
+        end
+        task.wait(0.5)
+    end
+    task.wait(2)   -- final buffer ให้ทุกอย่าง stable
 
     -- auto attack (เหมือน standalone)
     local currentTarget    = nil
@@ -559,10 +595,11 @@ local function farmKillBoss(worldName)
                     lastStage = bossData.stage
                 end
                 if bossData.stage == 2 then
-                    local mobData = findNearestMob_()
-                    if mobData then
-                        root.CFrame = CFrame.new(mobData.part.Position + Vector3.new(0,10,0), mobData.part.Position)
-                        currentTarget     = mobData
+                    -- ★ scan เฉพาะ stage mob ใกล้บอส (กัน Tundra wild mob)
+                    local mob = findStageMob(bossData.part.Position)
+                    if mob then
+                        root.CFrame = CFrame.new(mob.Position + Vector3.new(0,10,0), mob.Position)
+                        currentTarget     = { part = mob }
                         currentTargetType = "Mobs"
                         task.wait(1)
                     else
