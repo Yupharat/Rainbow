@@ -887,10 +887,10 @@ local function farmTreasureChest(worldName)
         return nearest
     end
 
-    -- TP ไปจุดแรก (ถ้ามี waypoints)
+    -- TP ไปจุดแรก (ถ้ามี waypoints) — +10 Y กัน character ติดพื้น/ตกท้องฟ้า
     if #waypoints > 0 then
         local r = getRoot()
-        if r then r.CFrame = CFrame.new(waypoints[wpIdx]) end
+        if r then r.CFrame = CFrame.new(waypoints[wpIdx] + Vector3.new(0, 10, 0)) end
         task.wait(2)
     end
 
@@ -955,12 +955,12 @@ local function farmTreasureChest(worldName)
                 end
             end
         else
-            -- ไม่เจอกล่อง → รอ 2 วิ แล้ว TP ไปจุดถัดไป
+            -- ไม่เจอกล่อง → รอ 2 วิ แล้ว TP ไปจุดถัดไป (+10 Y)
             if #waypoints > 0 then
                 task.wait(2)
                 wpIdx = wpIdx % #waypoints + 1
                 local r = getRoot()
-                if r then r.CFrame = CFrame.new(waypoints[wpIdx]) end
+                if r then r.CFrame = CFrame.new(waypoints[wpIdx] + Vector3.new(0, 10, 0)) end
                 task.wait(1)
             else
                 task.wait(1)
