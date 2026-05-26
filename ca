@@ -863,8 +863,10 @@ local function farmTreasureChest(worldName)
 
     local waypoints = CHEST_WAYPOINTS[worldName] or {}
     local wpIdx = 1
+    local skipPositions = {}   -- positionPart.Name ที่ server reject → ไม่ลองอีก
 
-    local dropRemote = RS:FindFirstChild("TreasureChestDropsRemote")
+    -- ★ TreasureChestDropsRemote อยู่ที่ RS.Remotes ไม่ใช่ RS ตรง (dump 118295 RemoteUtils)
+    local dropRemote = RS:WaitForChild("Remotes", 10):FindFirstChild("TreasureChestDropsRemote")
     if dropRemote then
         dropRemote.OnClientEvent:Connect(function(chestValue, drops)
             for itemIdx in pairs(drops) do
@@ -874,7 +876,21 @@ local function farmTreasureChest(worldName)
         end)
         print("💰 TreasureChestDropsRemote connected")
     else
-        warn("💰 ไม่เจอ TreasureChestDropsRemote")
+        warn("💰 ไม่เจอ RS.Remotes.TreasureChestDropsRemote")
+    end
+
+    -- ★ count chests ที่ server confirmed opened (ใน LP.Data.TreasureChests.<world>)
+    --   ใช้เช็คว่า Dead=true ทำให้เปิดสำเร็จมั้ย (dump 161595, verified check_chest_spawns.lua)
+    local function countOpened()
+        local pd = LP:FindFirstChild("Data")
+        local tcFolder = pd and pd:FindFirstChild("TreasureChests")
+        local worldFolder = tcFolder and tcFolder:FindFirstChild(worldName)
+        if not worldFolder then return 0 end
+        local n = 0
+        for _, v in ipairs(worldFolder:GetChildren()) do
+            if v.Value == true then n += 1 end
+        end
+        return n
     end
 
     local function findChest()
@@ -883,6 +899,7 @@ local function farmTreasureChest(worldName)
         local nearest, minDist = nil, math.huge
         local function checkPart(pos)
             if not pos:IsA("BasePart") then return end
+            if skipPositions[pos.Name] then return end
             local model = pos:FindFirstChildWhichIsA("Model")
             if not model or not model.PrimaryPart then return end
             local dead = model.PrimaryPart:FindFirstChild("Dead")
@@ -912,7 +929,44 @@ local function farmTreasureChest(worldName)
         return nearest
     end
 
-    -- TP ไปจุดแรก (ถ้ามี waypoints) — +10 Y กัน character ติดพื้น/ตกท้องฟ้า
+    -- ★ Open flow (verified จาก dump 299266-299287):
+    --   1. Set PrimaryPart.Dead.Value=true → fires Dead changed signal → animation
+    --   2. Track.KeyframeReached("End") → game fire OpenChestRemote(idx, IsEventChest) เอง
+    --   3. Server validate ตำแหน่ง + opens → ChestValue.Value=true ใน LP.Data
+    --   หรือ server reject → Dead.Value=false (dump 299280) = locked/invalid
+    --   เราแค่ trigger Dead=true + watch LP.Data count → ไม่ต้องเรียก remote เอง
+    local DEAD_WAIT = 10   -- timeout รอ ChestValue flip (animation 3-5s + RTT)
+    local function openChest(chest)
+        if not chest or not chest.part then return false, "no chest" end
+        local dead = chest.part:FindFirstChild("Dead")
+        if not dead then
+            for _ = 1, 25 do
+                dead = chest.part:FindFirstChild("Dead")
+                if dead then break end
+                task.wait(0.2)
+            end
+        end
+        if not dead then return false, "no Dead value (streaming?)" end
+        if dead.Value then return true, "already dead" end
+
+        local beforeOpened = countOpened()
+        pcall(function() dead.Value = true end)
+        print("💰 Dead=true →", chest.model.Name)
+
+        local t0 = tick()
+        while tick() - t0 < DEAD_WAIT do
+            if countOpened() > beforeOpened then
+                return true, ("opened (%.1fs)"):format(tick() - t0)
+            end
+            if not dead.Value then
+                return false, ("REJECTED (Dead reverted %.1fs)"):format(tick() - t0)
+            end
+            task.wait(0.1)
+        end
+        return false, ("timeout %ds"):format(DEAD_WAIT)
+    end
+
+    -- TP จุดแรก
     if #waypoints > 0 then
         local r = getRoot()
         if r then r.CFrame = CFrame.new(waypoints[wpIdx] + Vector3.new(0, 10, 0)) end
@@ -929,58 +983,19 @@ local function farmTreasureChest(worldName)
                     chest.part.Position
                 )
             end)
-            task.wait(0.5)
+            task.wait(0.8)   -- รอ Dead replicate
 
-            -- ★ Open flow (verified จาก dump line 299266-299287):
-            --   1. Set PrimaryPart.Dead.Value=true → fires Dead changed signal → play animation
-            --   2. Track.KeyframeReached("End") → game fire OpenChestRemote(tonumber(ChestValue.Name), IsEventChest)
-            --   3. Server validate chest index + opens
-            local dead
-            for _ = 1, 15 do
-                dead = chest.part:FindFirstChild("Dead")
-                if dead then break end
-                task.wait(0.3)
-            end
-            if dead and not dead.Value then
-                pcall(function() dead.Value = true end)
-                print("💰 Dead=true →", chest.model.Name, "— รอ animation...")
-                task.wait(10)
+            local ok, msg = openChest(chest)
+            if ok then
+                print(("  ✅ %s"):format(msg))
             else
-                task.wait(0.3)
-            end
-
-            -- ★ Fallback: enumerate chests จริงใน LP.PlayerData.TreasureChests.<world>
-            --   (dump line 161595: TreasureChests folder, children = "1", "2", ... by index)
-            --   เปิดเฉพาะ index ที่มีจริง + ยังไม่ opened (Value=false) — เลิก spam random 1-20
-            local opc = LP:FindFirstChild("Remotes") and LP.Remotes:FindFirstChild("OpenChestRemote")
-            if opc then
-                local pd = LP:FindFirstChild("PlayerData")
-                local tcFolder = pd and pd:FindFirstChild("TreasureChests")
-                local worldFolder = tcFolder and tcFolder:FindFirstChild(worldName)
-                if worldFolder then
-                    for _, chestValue in ipairs(worldFolder:GetChildren()) do
-                        local idx = tonumber(chestValue.Name)
-                        if idx and chestValue.Value ~= true then
-                            pcall(function() opc:InvokeServer(idx, false) end)
-                            task.wait(0.05)
-                        end
-                    end
-                end
-                -- ลอง event chests folder ด้วย (ถ้ามี event active)
-                local etcFolder = pd and pd:FindFirstChild("EventTreasureChests")
-                local eventWorld = etcFolder and etcFolder:FindFirstChild(worldName)
-                if eventWorld then
-                    for _, chestValue in ipairs(eventWorld:GetChildren()) do
-                        local idx = tonumber(chestValue.Name)
-                        if idx and chestValue.Value ~= true then
-                            pcall(function() opc:InvokeServer(idx, true) end)   -- ★ true = IsEventChest
-                            task.wait(0.05)
-                        end
-                    end
+                warn(("  ❌ pos=%s: %s"):format(chest.positionPart.Name, msg))
+                if msg:find("REJECTED") or msg:find("no Dead") then
+                    skipPositions[chest.positionPart.Name] = true
                 end
             end
         else
-            -- ไม่เจอกล่อง → รอ 2 วิ แล้ว TP ไปจุดถัดไป (+10 Y)
+            -- ไม่เจอกล่อง → TP ไป waypoint ถัดไป
             if #waypoints > 0 then
                 task.wait(2)
                 wpIdx = wpIdx % #waypoints + 1
