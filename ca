@@ -906,7 +906,10 @@ local function farmTreasureChest(worldName)
             end)
             task.wait(0.5)
 
-            -- เปิดแบบ AutoChest: รอ Dead → set true → animation ยิง remote เอง
+            -- ★ Open flow (verified จาก dump line 299266-299287):
+            --   1. Set PrimaryPart.Dead.Value=true → fires Dead changed signal → play animation
+            --   2. Track.KeyframeReached("End") → game fire OpenChestRemote(tonumber(ChestValue.Name), IsEventChest)
+            --   3. Server validate chest index + opens
             local dead
             for _ = 1, 15 do
                 dead = chest.part:FindFirstChild("Dead")
@@ -921,13 +924,34 @@ local function farmTreasureChest(worldName)
                 task.wait(0.3)
             end
 
-            -- leak: สุ่มคีย์ 1–20 ยิง OpenChestRemote 20 ครั้ง (opc style)
+            -- ★ Fallback: enumerate chests จริงใน LP.PlayerData.TreasureChests.<world>
+            --   (dump line 161595: TreasureChests folder, children = "1", "2", ... by index)
+            --   เปิดเฉพาะ index ที่มีจริง + ยังไม่ opened (Value=false) — เลิก spam random 1-20
             local opc = LP:FindFirstChild("Remotes") and LP.Remotes:FindFirstChild("OpenChestRemote")
             if opc then
-                for _ = 1, 20 do
-                    local k = math.random(1, 20)
-                    pcall(function() opc:InvokeServer(k, false) end)
-                    task.wait(0.05)
+                local pd = LP:FindFirstChild("PlayerData")
+                local tcFolder = pd and pd:FindFirstChild("TreasureChests")
+                local worldFolder = tcFolder and tcFolder:FindFirstChild(worldName)
+                if worldFolder then
+                    for _, chestValue in ipairs(worldFolder:GetChildren()) do
+                        local idx = tonumber(chestValue.Name)
+                        if idx and chestValue.Value ~= true then
+                            pcall(function() opc:InvokeServer(idx, false) end)
+                            task.wait(0.05)
+                        end
+                    end
+                end
+                -- ลอง event chests folder ด้วย (ถ้ามี event active)
+                local etcFolder = pd and pd:FindFirstChild("EventTreasureChests")
+                local eventWorld = etcFolder and etcFolder:FindFirstChild(worldName)
+                if eventWorld then
+                    for _, chestValue in ipairs(eventWorld:GetChildren()) do
+                        local idx = tonumber(chestValue.Name)
+                        if idx and chestValue.Value ~= true then
+                            pcall(function() opc:InvokeServer(idx, true) end)   -- ★ true = IsEventChest
+                            task.wait(0.05)
+                        end
+                    end
                 end
             end
         else
