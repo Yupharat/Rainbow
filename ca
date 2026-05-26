@@ -966,44 +966,111 @@ local function farmTreasureChest(worldName)
         return false, ("timeout %ds"):format(DEAD_WAIT)
     end
 
-    -- TP จุดแรก
-    if #waypoints > 0 then
-        local r = getRoot()
-        if r then r.CFrame = CFrame.new(waypoints[wpIdx] + Vector3.new(0, 10, 0)) end
-        task.wait(2)
+    -- ★ PRE-SCAN PHASE — ยืนเฉยๆ ขอ server stream parallel ทุก waypoint → check Dead
+    --   เร็วกว่า loop TP เพราะ skip dead chests ก่อน ไม่เสีย TP+wait ที่ไม่มีค่า
+    local STREAM_TIMEOUT = 3
+    local STREAM_WAIT    = 0.15
+    local BATCH_SIZE     = 5
+    local CS = game:GetService("CollectionService")
+
+    local function preScan()
+        local liveList = {}
+        local stats = { total = 0, live = 0, dead = 0, missing = 0 }
+
+        for batchStart = 1, #waypoints, BATCH_SIZE do
+            local batchEnd = math.min(batchStart + BATCH_SIZE - 1, #waypoints)
+
+            -- Parallel: spawn ทุก request ใน batch, รอจน finish ครบ
+            local pending = batchEnd - batchStart + 1
+            local doneEvent = Instance.new("BindableEvent")
+            for i = batchStart, batchEnd do
+                local pos = waypoints[i]
+                task.spawn(function()
+                    pcall(function() LP:RequestStreamAroundAsync(pos, STREAM_TIMEOUT) end)
+                    pending -= 1
+                    if pending == 0 then doneEvent:Fire() end
+                end)
+            end
+            doneEvent.Event:Wait()
+            doneEvent:Destroy()
+            task.wait(STREAM_WAIT)
+
+            -- เช็ค chest ที่แต่ละ waypoint ใน batch ว่ายัง live มั้ย
+            for i = batchStart, batchEnd do
+                stats.total += 1
+                local wp = waypoints[i]
+                local found = false
+                for _, pos in ipairs(CS:GetTagged("TreasureChestPosition")) do
+                    if (pos.Position - wp).Magnitude < 10 then
+                        found = true
+                        if not skipPositions[pos.Name] then
+                            local model = pos:FindFirstChildWhichIsA("Model")
+                            if model and model.PrimaryPart then
+                                local dead = model.PrimaryPart:FindFirstChild("Dead")
+                                if dead and dead.Value then
+                                    stats.dead += 1
+                                else
+                                    stats.live += 1
+                                    table.insert(liveList, wp)
+                                end
+                            else
+                                stats.missing += 1
+                            end
+                        end
+                        break
+                    end
+                end
+                if not found then stats.missing += 1 end
+            end
+        end
+
+        print(("💰 pre-scan: total=%d live=%d dead=%d missing=%d"):format(
+            stats.total, stats.live, stats.dead, stats.missing))
+        return liveList
     end
 
+    -- ★ Outer loop: pre-scan + open ซ้ำจนกว่า mission done
+    --   (ถ้า server respawn chest หลังเปิดครบ → loop scan ใหม่)
     while not isMissionDone(worldName, "TreasureChest") do
-        local chest = findChest()
-        local root  = getRoot()
-        if chest and root then
-            pcall(function()
-                root.CFrame = CFrame.new(
-                    chest.part.Position + Vector3.new(0, 5, 0),
-                    chest.part.Position
-                )
-            end)
-            task.wait(0.8)   -- รอ Dead replicate
-
-            local ok, msg = openChest(chest)
-            if ok then
-                print(("  ✅ %s"):format(msg))
-            else
-                warn(("  ❌ pos=%s: %s"):format(chest.positionPart.Name, msg))
-                if msg:find("REJECTED") or msg:find("no Dead") then
-                    skipPositions[chest.positionPart.Name] = true
-                end
-            end
+        local liveList = preScan()
+        if #liveList == 0 then
+            -- ไม่มี live chest → mission น่าจะเสร็จแล้ว ออก
+            if isMissionDone(worldName, "TreasureChest") then break end
+            -- หรือยังไม่เสร็จแต่ไม่มี chest → รอ respawn 5s แล้วลองใหม่
+            task.wait(5)
         else
-            -- ไม่เจอกล่อง → TP ไป waypoint ถัดไป
-            if #waypoints > 0 then
-                task.wait(2)
-                wpIdx = wpIdx % #waypoints + 1
+            for _, wp in ipairs(liveList) do
+                if isMissionDone(worldName, "TreasureChest") then break end
+
                 local r = getRoot()
-                if r then r.CFrame = CFrame.new(waypoints[wpIdx] + Vector3.new(0, 10, 0)) end
-                task.wait(1)
-            else
-                task.wait(1)
+                if r then
+                    r.CFrame = CFrame.new(wp + Vector3.new(0, 5, 0), wp)
+                end
+                task.wait(0.8)   -- รอ Dead replicate
+
+                -- Re-find chest (อาจ stream out ระหว่าง pre-scan → ตอนนี้)
+                local chest
+                for _, pos in ipairs(CS:GetTagged("TreasureChestPosition")) do
+                    if (pos.Position - wp).Magnitude < 10 then
+                        local model = pos:FindFirstChildWhichIsA("Model")
+                        if model and model.PrimaryPart then
+                            chest = { model = model, part = model.PrimaryPart, positionPart = pos }
+                        end
+                        break
+                    end
+                end
+
+                if chest then
+                    local ok, msg = openChest(chest)
+                    if ok then
+                        print(("  ✅ %s"):format(msg))
+                    else
+                        warn(("  ❌ pos=%s: %s"):format(chest.positionPart.Name, msg))
+                        if msg:find("REJECTED") or msg:find("no Dead") then
+                            skipPositions[chest.positionPart.Name] = true
+                        end
+                    end
+                end
             end
         end
     end
