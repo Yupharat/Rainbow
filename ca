@@ -1071,60 +1071,86 @@ do
         else
             local missionsRoot = client.SeasonsData:FindFirstChild("Missions")
 
-            -- Structure: Missions.<Type>.<Difficulty>.<MissionName>
-            -- (dump 253356: Difficulty = MissionValue.Parent.Name)
-            -- Difficulty values: Tutorial / Novice / Amateur / Journeyman / Expert / Master
+            -- ★ ไม่รู้ structure แน่ๆ (1-level vs 2-level by difficulty) — ใช้ recursive scan
+            --   หา node ที่มี Completed+Claimed BoolValue = mission จริง
+            --   Parent.Name อาจเป็น "Daily"/"Weekly"/"Tutorial" หรือ difficulty (Novice/Amateur/...)
+            local function isMissionNode(obj)
+                return obj:FindFirstChild("Completed") and obj:FindFirstChild("Claimed")
+            end
+
             local function tryClaim(mission, missionType)
                 local completed = mission:FindFirstChild("Completed")
                 local claimedV  = mission:FindFirstChild("Claimed")
-                if completed and completed.Value and claimedV and not claimedV.Value then
-                    local difficulty = mission.Parent.Name
-                    local ok, result = pcall(function()
-                        return claimRemote:InvokeServer(missionType, difficulty, mission.Name)
-                    end)
-                    if ok and result then
-                        print(("✅ claimed %s/%s [%s]"):format(missionType, difficulty, mission.Name))
-                    else
-                        warn(("⚠ claim fail %s/%s [%s]: ok=%s result=%s"):format(
-                            missionType, difficulty, mission.Name, tostring(ok), tostring(result)
-                        ))
-                    end
+                if not (completed and completed.Value and claimedV and not claimedV.Value) then
+                    return
+                end
+                local difficulty = mission.Parent.Name
+                -- Diagnostic: log path + args
+                print(("[claim try] type=%s diff=%s name=%s parentPath=%s"):format(
+                    missionType, difficulty, mission.Name, mission:GetFullName()))
+                local ok, result = pcall(function()
+                    return claimRemote:InvokeServer(missionType, difficulty, mission.Name)
+                end)
+                if ok and result then
+                    print(("✅ claimed %s/%s [%s]"):format(missionType, difficulty, mission.Name))
+                else
+                    warn(("⚠ claim fail %s/%s [%s]: ok=%s result=%s"):format(
+                        missionType, difficulty, mission.Name, tostring(ok), tostring(result)
+                    ))
                 end
             end
 
             local function hookMission(mission, missionType)
-                local completed = mission:WaitForChild("Completed", 5)
-                if not completed then return end
-                tryClaim(mission, missionType)
-                completed:GetPropertyChangedSignal("Value"):Connect(function()
-                    tryClaim(mission, missionType)
-                end)
+                tryClaim(mission, missionType)   -- เผื่อ completed=true อยู่แล้ว
+                local completed = mission:FindFirstChild("Completed")
+                if completed then
+                    completed:GetPropertyChangedSignal("Value"):Connect(function()
+                        tryClaim(mission, missionType)
+                    end)
+                end
+                local claimedV = mission:FindFirstChild("Claimed")
+                if claimedV then
+                    claimedV:GetPropertyChangedSignal("Value"):Connect(function()
+                        tryClaim(mission, missionType)
+                    end)
+                end
             end
 
-            local function hookDifficulty(diffFolder, missionType)
-                for _, m in ipairs(diffFolder:GetChildren()) do
-                    task.spawn(hookMission, m, missionType)
+            -- Recursive: ถ้า node เป็น mission → hook, ไม่ใช่ → ลงลึก
+            local function hookRec(node, missionType, depth)
+                depth = depth or 0
+                if depth > 4 then return end   -- กัน infinite recursion
+                if isMissionNode(node) then
+                    hookMission(node, missionType)
+                    return
                 end
-                diffFolder.ChildAdded:Connect(function(m)
-                    hookMission(m, missionType)
+                for _, child in ipairs(node:GetChildren()) do
+                    task.spawn(hookRec, child, missionType, depth + 1)
+                end
+                node.ChildAdded:Connect(function(child)
+                    hookRec(child, missionType, depth + 1)
                 end)
             end
 
             local function hookType(missionType)
                 local typeFolder = missionsRoot and missionsRoot:FindFirstChild(missionType)
-                if not typeFolder then return end
-                for _, diffFolder in ipairs(typeFolder:GetChildren()) do
-                    hookDifficulty(diffFolder, missionType)
+                if not typeFolder then
+                    warn(("⚠ Missions.%s ไม่เจอ"):format(missionType))
+                    return
                 end
-                typeFolder.ChildAdded:Connect(function(diffFolder)
-                    hookDifficulty(diffFolder, missionType)
-                end)
+                -- Diagnostic: print structure
+                print(("[season] %s folder = %s, children:"):format(missionType, typeFolder:GetFullName()))
+                for _, c in ipairs(typeFolder:GetChildren()) do
+                    local hasComp = c:FindFirstChild("Completed") and "[mission]" or "[folder]"
+                    print(("  - %s %s (%s)"):format(c.Name, hasComp, c.ClassName))
+                end
+                hookRec(typeFolder, missionType, 0)
             end
 
             hookType("Daily")
             hookType("Weekly")
             hookType("Tutorial")
-            print("✅ Season mission auto-claim hooked (Daily + Weekly + Tutorial)")
+            print("✅ Season mission auto-claim hooked (recursive)")
         end
     end
 end
