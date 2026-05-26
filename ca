@@ -1045,9 +1045,10 @@ end
 ----------------------------------------------------
 -- AUTO-CLAIM SEASON MISSIONS (Daily/Weekly) — event-driven
 ----------------------------------------------------
--- dump 257556: client.SeasonsData.Missions.{Daily,Weekly}
--- dump 253403+257516: mission.Completed:GetPropertyChangedSignal("Value") — game pattern
--- dump 253532: ClaimMissionRemote:InvokeServer(missionType, difficulty, missionName)
+-- verified จาก spy + dump:
+--   dump 276943: RS.Remotes.ClaimSeasonMissionRemote:InvokeServer(typeIdx, missionIdx)
+--   dump 164680: typeIdx → Daily=1, Weekly=2 (ไม่มี Tutorial)
+--   structure: LP.Data.Seasons.Missions.{Daily/Weekly}.<index>  (1-level, name=number string)
 -- เงื่อนไข: ต้องอยู่ guild
 do
     local guild = LP.Data and LP.Data:FindFirstChild("Guild")
@@ -1055,102 +1056,61 @@ do
     if current == "" then
         print("⏭ ไม่อยู่ guild → skip auto-claim season missions")
     else
-        local okS, Sonar = pcall(require, RS:WaitForChild("Sonar", 10))
-        local PlayerWrapper, RemoteUtils
-        if okS and Sonar then
-            local okMod, pw, ru = pcall(function()
-                return Sonar("PlayerWrapper"), Sonar("RemoteUtils")
-            end)
-            if okMod then PlayerWrapper, RemoteUtils = pw, ru end
-        end
-        local client = PlayerWrapper and PlayerWrapper.GetClient() or nil
-        local claimRemote = RemoteUtils and RemoteUtils.GetRemoteFunction("ClaimMissionRemote") or nil
+        local claimRemote = RS:WaitForChild("Remotes", 10):WaitForChild("ClaimSeasonMissionRemote", 10)
+        local seasonsData = LP.Data and LP.Data:FindFirstChild("Seasons")
+        local missionsRoot = seasonsData and seasonsData:FindFirstChild("Missions")
 
-        if not (client and claimRemote and client.SeasonsData) then
-            warn("⚠ Sonar/SeasonsData/ClaimMissionRemote ไม่พร้อม — skip")
+        if not (claimRemote and missionsRoot) then
+            warn("⚠ ClaimSeasonMissionRemote หรือ Data.Seasons.Missions ไม่เจอ — skip")
         else
-            local missionsRoot = client.SeasonsData:FindFirstChild("Missions")
+            local TYPE_MAP = { Daily = 1, Weekly = 2 }
 
-            -- ★ ไม่รู้ structure แน่ๆ (1-level vs 2-level by difficulty) — ใช้ recursive scan
-            --   หา node ที่มี Completed+Claimed BoolValue = mission จริง
-            --   Parent.Name อาจเป็น "Daily"/"Weekly"/"Tutorial" หรือ difficulty (Novice/Amateur/...)
-            local function isMissionNode(obj)
-                return obj:FindFirstChild("Completed") and obj:FindFirstChild("Claimed")
-            end
-
-            local function tryClaim(mission, missionType)
-                local completed = mission:FindFirstChild("Completed")
-                local claimedV  = mission:FindFirstChild("Claimed")
-                if not (completed and completed.Value and claimedV and not claimedV.Value) then
-                    return
-                end
-                local difficulty = mission.Parent.Name
-                -- Diagnostic: log path + args
-                print(("[claim try] type=%s diff=%s name=%s parentPath=%s"):format(
-                    missionType, difficulty, mission.Name, mission:GetFullName()))
-                local ok, result = pcall(function()
-                    return claimRemote:InvokeServer(missionType, difficulty, mission.Name)
-                end)
-                if ok and result then
-                    print(("✅ claimed %s/%s [%s]"):format(missionType, difficulty, mission.Name))
-                else
-                    warn(("⚠ claim fail %s/%s [%s]: ok=%s result=%s"):format(
-                        missionType, difficulty, mission.Name, tostring(ok), tostring(result)
-                    ))
-                end
-            end
-
-            local function hookMission(mission, missionType)
-                tryClaim(mission, missionType)   -- เผื่อ completed=true อยู่แล้ว
-                local completed = mission:FindFirstChild("Completed")
-                if completed then
-                    completed:GetPropertyChangedSignal("Value"):Connect(function()
-                        tryClaim(mission, missionType)
-                    end)
-                end
+            local function tryClaim(mission, typeName, typeIdx)
+                local comp = mission:FindFirstChild("Completed")
                 local claimedV = mission:FindFirstChild("Claimed")
-                if claimedV then
-                    claimedV:GetPropertyChangedSignal("Value"):Connect(function()
-                        tryClaim(mission, missionType)
+                if not (comp and comp.Value and claimedV and not claimedV.Value) then return end
+                local idx = tonumber(mission.Name)
+                if not idx then return end
+                local ok, result = pcall(function()
+                    return claimRemote:InvokeServer(typeIdx, idx)
+                end)
+                if ok and result == true then
+                    print(("✅ claimed %s.%s (typeIdx=%d, idx=%d)"):format(typeName, mission.Name, typeIdx, idx))
+                else
+                    warn(("⚠ claim fail %s.%s — ok=%s result=%s"):format(
+                        typeName, mission.Name, tostring(ok), tostring(result)))
+                end
+            end
+
+            local function hookMission(mission, typeName, typeIdx)
+                tryClaim(mission, typeName, typeIdx)   -- เผื่อ completed อยู่แล้วตอน hook
+                local comp = mission:FindFirstChild("Completed")
+                if comp then
+                    comp:GetPropertyChangedSignal("Value"):Connect(function()
+                        tryClaim(mission, typeName, typeIdx)
                     end)
                 end
             end
 
-            -- Recursive: ถ้า node เป็น mission → hook, ไม่ใช่ → ลงลึก
-            local function hookRec(node, missionType, depth)
-                depth = depth or 0
-                if depth > 4 then return end   -- กัน infinite recursion
-                if isMissionNode(node) then
-                    hookMission(node, missionType)
+            local function hookType(typeName, typeIdx)
+                local typeFolder = missionsRoot:FindFirstChild(typeName)
+                if not typeFolder then
+                    warn(("⚠ Missions.%s ไม่เจอ"):format(typeName))
                     return
                 end
-                for _, child in ipairs(node:GetChildren()) do
-                    task.spawn(hookRec, child, missionType, depth + 1)
+                for _, m in ipairs(typeFolder:GetChildren()) do
+                    task.spawn(hookMission, m, typeName, typeIdx)
                 end
-                node.ChildAdded:Connect(function(child)
-                    hookRec(child, missionType, depth + 1)
+                -- ดักจับ mission ใหม่ที่ replicate มา (daily refresh)
+                typeFolder.ChildAdded:Connect(function(m)
+                    hookMission(m, typeName, typeIdx)
                 end)
             end
 
-            local function hookType(missionType)
-                local typeFolder = missionsRoot and missionsRoot:FindFirstChild(missionType)
-                if not typeFolder then
-                    warn(("⚠ Missions.%s ไม่เจอ"):format(missionType))
-                    return
-                end
-                -- Diagnostic: print structure
-                print(("[season] %s folder = %s, children:"):format(missionType, typeFolder:GetFullName()))
-                for _, c in ipairs(typeFolder:GetChildren()) do
-                    local hasComp = c:FindFirstChild("Completed") and "[mission]" or "[folder]"
-                    print(("  - %s %s (%s)"):format(c.Name, hasComp, c.ClassName))
-                end
-                hookRec(typeFolder, missionType, 0)
+            for typeName, typeIdx in pairs(TYPE_MAP) do
+                hookType(typeName, typeIdx)
             end
-
-            hookType("Daily")
-            hookType("Weekly")
-            hookType("Tutorial")
-            print("✅ Season mission auto-claim hooked (recursive)")
+            print("✅ Season mission auto-claim hooked (Daily + Weekly)")
         end
     end
 end
