@@ -966,66 +966,91 @@ local function farmTreasureChest(worldName)
         return false, ("timeout %ds"):format(DEAD_WAIT)
     end
 
-    -- ★ PRE-SCAN PHASE — ยืนเฉยๆ ขอ server stream parallel ทุก waypoint → check Dead
-    --   เร็วกว่า loop TP เพราะ skip dead chests ก่อน ไม่เสีย TP+wait ที่ไม่มีค่า
-    local STREAM_TIMEOUT = 3
-    local STREAM_WAIT    = 0.15
-    local BATCH_SIZE     = 5
+    -- ★ PRE-SCAN PHASE — Stream + poll + retry per waypoint → list live waypoints
+    --   Stop เมื่อเจอ TARGET_FOUND ตำแหน่ง (live+dead) = proof scan ไม่ถูกขัด
+    --   (chest fix 5/world — verified จาก check_chest_spawns.lua)
+    local STREAM_TIMEOUT  = 5      -- max yield/RequestStreamAroundAsync
+    local POLL_INTERVAL   = 0.2    -- ดู tag ทุก 0.2s ขณะรอ
+    local POLL_TIMEOUT    = 3      -- รอ tag fire/attempt
+    local MAX_RETRIES     = 2      -- = 3 attempts/waypoint (~12s worst)
+    local TARGET_FOUND    = 5      -- chest fix 5/world (live+dead); ครบ break
+    local MAX_PASSES      = 3      -- rescan outer ถ้าไม่ถึง TARGET
+    local RESCAN_WAIT     = 3      -- รอก่อน pass ถัดไป
+    local CHEST_TOLERANCE = 10     -- waypoint = spawn เป๊ะ
     local CS = game:GetService("CollectionService")
+
+    local function findTaggedAt(wp)
+        for _, pos in ipairs(CS:GetTagged("TreasureChestPosition")) do
+            if pos:IsDescendantOf(workspace) and (pos.Position - wp).Magnitude < CHEST_TOLERANCE then
+                return pos
+            end
+        end
+        return nil
+    end
+
+    local function waitForTagged(wp, timeout)
+        local t0 = tick()
+        while tick() - t0 < timeout do
+            local pos = findTaggedAt(wp)
+            if pos then return pos end
+            task.wait(POLL_INTERVAL)
+        end
+        return nil
+    end
+
+    local function streamAndFind(wp)
+        local existing = findTaggedAt(wp)
+        if existing then return existing, 0 end
+        for attempt = 0, MAX_RETRIES do
+            pcall(function() LP:RequestStreamAroundAsync(wp, STREAM_TIMEOUT) end)
+            local pos = waitForTagged(wp, POLL_TIMEOUT)
+            if pos then return pos, attempt end
+        end
+        return nil, MAX_RETRIES
+    end
 
     local function preScan()
         local liveList = {}
-        local stats = { total = 0, live = 0, dead = 0, missing = 0 }
+        local seenNames = {}   -- dedup ข้าม pass
+        local stats = { passes = 0, live = 0, dead = 0, missing = 0, retries = 0 }
 
-        for batchStart = 1, #waypoints, BATCH_SIZE do
-            local batchEnd = math.min(batchStart + BATCH_SIZE - 1, #waypoints)
+        for pass = 1, MAX_PASSES do
+            stats.passes = pass
 
-            -- Parallel: spawn ทุก request ใน batch, รอจน finish ครบ
-            local pending = batchEnd - batchStart + 1
-            local doneEvent = Instance.new("BindableEvent")
-            for i = batchStart, batchEnd do
-                local pos = waypoints[i]
-                task.spawn(function()
-                    pcall(function() LP:RequestStreamAroundAsync(pos, STREAM_TIMEOUT) end)
-                    pending -= 1
-                    if pending == 0 then doneEvent:Fire() end
-                end)
-            end
-            doneEvent.Event:Wait()
-            doneEvent:Destroy()
-            task.wait(STREAM_WAIT)
+            for _, wp in ipairs(waypoints) do
+                if (stats.live + stats.dead) >= TARGET_FOUND then break end
 
-            -- เช็ค chest ที่แต่ละ waypoint ใน batch ว่ายัง live มั้ย
-            for i = batchStart, batchEnd do
-                stats.total += 1
-                local wp = waypoints[i]
-                local found = false
-                for _, pos in ipairs(CS:GetTagged("TreasureChestPosition")) do
-                    if (pos.Position - wp).Magnitude < 10 then
-                        found = true
-                        if not skipPositions[pos.Name] then
-                            local model = pos:FindFirstChildWhichIsA("Model")
-                            if model and model.PrimaryPart then
-                                local dead = model.PrimaryPart:FindFirstChild("Dead")
-                                if dead and dead.Value then
-                                    stats.dead += 1
-                                else
-                                    stats.live += 1
-                                    table.insert(liveList, wp)
-                                end
-                            else
-                                stats.missing += 1
-                            end
+                local pos, retries = streamAndFind(wp)
+                stats.retries = stats.retries + retries
+
+                if pos and not seenNames[pos.Name] then
+                    seenNames[pos.Name] = true
+                    local model = pos:FindFirstChildWhichIsA("Model")
+                    if model and model.PrimaryPart then
+                        local dead = model.PrimaryPart:FindFirstChild("Dead")
+                        if (dead and dead.Value) or skipPositions[pos.Name] then
+                            stats.dead += 1   -- skip-listed นับเป็น dead (กัน loop)
+                        else
+                            stats.live += 1
+                            table.insert(liveList, wp)
                         end
-                        break
                     end
+                elseif not pos then
+                    stats.missing += 1
                 end
-                if not found then stats.missing += 1 end
             end
+
+            if (stats.live + stats.dead) >= TARGET_FOUND then break end
+            if pass < MAX_PASSES then task.wait(RESCAN_WAIT) end
         end
 
-        print(("💰 pre-scan: total=%d live=%d dead=%d missing=%d"):format(
-            stats.total, stats.live, stats.dead, stats.missing))
+        if (stats.live + stats.dead) < TARGET_FOUND then
+            warn(("💰 ⚠ UNSTABLE — found=%d/%d (live=%d dead=%d) หลัง %d passes"):format(
+                stats.live + stats.dead, TARGET_FOUND, stats.live, stats.dead, stats.passes))
+        end
+
+        print(("💰 pre-scan: passes=%d live=%d dead=%d missing=%d retries=%d"):format(
+            stats.passes, stats.live, stats.dead, stats.missing, stats.retries))
         return liveList
     end
 
