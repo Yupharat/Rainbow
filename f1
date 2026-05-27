@@ -1,0 +1,521 @@
+-- s1 — Shinrin opener (ดันโลกจนถึง Shinrin แล้วเรียก Horst_AccountChangeDone)
+
+local CONFIG = {
+    -- ─── Performance ───
+    PERFORMANCE_MODE     = true,
+    DISABLE_3D           = false,
+
+    -- ─── Hooks ───
+    ANTI_AFK             = true,
+    ANTI_KICK            = true,
+    GODMODE              = true,
+
+    -- ─── Bootstrap ───
+    SKIP_TUTORIAL        = true,
+    TP_LOBBY_AFTER_TUT   = true,
+    RIDE_DRAGON          = true,
+    UNLOCK_UC            = true,
+    UC_UNLOCK_TIMEOUT    = 120,
+
+    -- ─── Shinrin opener ───
+    PROGRESS_TO_SHINRIN  = true,
+    PRELOAD_WAIT         = 10,
+}
+
+local LOBBY_PLACE_ID    = 3475397644
+local SHINRIN_PLACE_ID  = 125804922932357
+local WORLD_OPENER_URL  = "https://raw.githubusercontent.com/Yupharat/Rainbow/main/ca"
+local WORLD_CLIMB_URL   = "https://raw.githubusercontent.com/Yupharat/Rainbow/main/f"
+
+local Players    = game:GetService("Players")
+local RS         = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local VirtualU   = game:GetService("VirtualUser")
+local Lighting   = game:GetService("Lighting")
+
+if not game:IsLoaded() then game.Loaded:Wait() end
+repeat task.wait() until Players.LocalPlayer
+local LP = Players.LocalPlayer
+repeat task.wait() until LP.Character
+
+----------------------------------------------------
+-- HORST MANAGER
+----------------------------------------------------
+getgenv().HorstConfig = {
+    ["EnableLog"]        = true,
+    ["Whitescreen"]      = false,
+    ["EnableAddFriends"] = true,
+    ["LockFps"]          = { ["EnableLockFps"] = true, ["LockFpsAmount"] = 30 },
+    ["AutoFunctions"]    = { ["Enable"] = true },
+}
+pcall(function()
+    loadstring(game:HttpGet("https://raw.githubusercontent.com/HorstSpaceX/last_update/main/on_loaded.lua"))()
+end)
+print("[s1] ✅ Horst manager loaded")
+
+----------------------------------------------------
+-- 0. WAIT LOADING
+----------------------------------------------------
+local function isLoadingDone()
+    local okCI, ci = pcall(function() return LP:GetAttribute("ClientInitiated") end)
+    if okCI and ci ~= true then return false end
+    local okDS, syncing = pcall(function() return LP:GetAttribute("DataSyncing") end)
+    if okDS and syncing then return false end
+    local pg = LP:FindFirstChild("PlayerGui")
+    if pg then
+        local lg = pg:FindFirstChild("LoadingScreen")
+        if lg and lg.Enabled then return false end
+    end
+    return true
+end
+
+local _bootT = tick()
+while not isLoadingDone() and tick() - _bootT < 60 do task.wait(0.5) end
+task.wait(2)
+print(("[s1] loading done — %.1fs"):format(tick() - _bootT))
+
+local _t = tick()
+repeat task.wait(0.5)
+until (LP:FindFirstChild("Data") and LP.Data:FindFirstChild("Worlds")) or (tick()-_t > 15)
+
+local remotes = RS:WaitForChild("Remotes", 10)
+
+----------------------------------------------------
+-- 1. PERFORMANCE MODE
+----------------------------------------------------
+if CONFIG.PERFORMANCE_MODE then
+    task.spawn(function()
+        local SAFE_ANCESTOR = workspace:FindFirstChild("Interactions")
+
+        local function isUnderSafe(obj)
+            local p = obj.Parent
+            while p do
+                if p == SAFE_ANCESTOR then return true end
+                p = p.Parent
+            end
+            return false
+        end
+
+        local ANIM_CLASS = { KeyframeSequence = true }
+        local LIGHT_FX   = { ParticleEmitter = true, PointLight = true, Beam = true,
+                             Trail = true, Fire = true, Smoke = true }
+        local DECO_NAMES = { Boulder2 = true, GlowingRuins = true, Ruins = true,
+                             Archway = true, HillRuins = true, SwampRuins = true }
+
+        local batch, count = {}, 0
+        for _, v in ipairs(workspace:GetDescendants()) do
+            local del = false
+            if ANIM_CLASS[v.ClassName] then
+                del = true
+            elseif v.Name == "AnimSaves" and v:IsA("ObjectValue") then
+                del = true
+            elseif LIGHT_FX[v.ClassName] and not isUnderSafe(v) then
+                del = true
+            elseif v:IsA("MeshPart") and DECO_NAMES[v.Name] and not isUnderSafe(v) then
+                del = true
+            end
+            if del then
+                table.insert(batch, v)
+                count += 1
+                if count % 300 == 0 then task.wait() end
+            end
+        end
+        for _, v in ipairs(batch) do
+            pcall(function() if v and v.Parent then v:Destroy() end end)
+        end
+
+        pcall(function()
+            settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
+        end)
+        for _, v in ipairs(Lighting:GetChildren()) do
+            if v:IsA("PostEffect") or v:IsA("Atmosphere") or v:IsA("Sky") then
+                pcall(function() v:Destroy() end)
+            end
+        end
+        Lighting.GlobalShadows = false
+        Lighting.FogEnd = 9e9
+
+        workspace.DescendantAdded:Connect(function(obj)
+            if obj:IsA("ParticleEmitter") or obj:IsA("Beam") or
+               obj:IsA("Trail") or obj:IsA("Fire") or obj:IsA("Smoke") or
+               obj:IsA("Texture") or obj:IsA("Decal") then
+                pcall(function() obj:Destroy() end)
+            end
+        end)
+
+        if CONFIG.DISABLE_3D then
+            RunService:Set3dRenderingEnabled(false)
+        end
+        print("[s1] ✅ Performance mode")
+    end)
+end
+
+----------------------------------------------------
+-- 2. ANTI-AFK
+----------------------------------------------------
+if CONFIG.ANTI_AFK then
+    LP.Idled:Connect(function()
+        VirtualU:MoveMouse(Vector2.new(math.random(-10, 10), math.random(-10, 10)))
+    end)
+
+    local afkRemote = remotes and remotes:WaitForChild("SetLastPlayedUpdateRemote", 5)
+    if afkRemote then
+        local oldAfk
+        oldAfk = hookmetamethod(game, "__namecall", function(self, ...)
+            if getnamecallmethod() == "FireServer" and self == afkRemote then return end
+            return oldAfk(self, ...)
+        end)
+    end
+    print("[s1] ✅ Anti-AFK")
+end
+
+----------------------------------------------------
+-- 3. ANTI-KICK
+----------------------------------------------------
+if CONFIG.ANTI_KICK then
+    local BLOCK_REMOTES = {
+        EventExportClientMetrics   = true,
+        GameAnalyticsError         = true,
+        GameAnalyticsRemoteConfigs = true,
+        PostStrafeAnalyticsRemote  = true,
+        FunctionGet                = true,
+        AFKEvent                   = true,
+    }
+    local mt = getrawmetatable(game)
+    setreadonly(mt, false)
+    local oldNC = mt.__namecall
+    mt.__namecall = function(self, ...)
+        if checkcaller() then return oldNC(self, ...) end
+        local m = getnamecallmethod()
+        if m == "Kick" then return nil end
+        if m == "Teleport" or m == "TeleportAsync" then return nil end
+        if (m == "FireServer" or m == "InvokeServer") and BLOCK_REMOTES[self.Name] then
+            return nil
+        end
+        return oldNC(self, ...)
+    end
+    setreadonly(mt, true)
+    print("[s1] ✅ Anti-kick")
+end
+
+----------------------------------------------------
+-- 4. GODMODE
+----------------------------------------------------
+if CONFIG.GODMODE then
+    local mobRemote = remotes and remotes:FindFirstChild("MobDamageRemote")
+    if mobRemote then
+        local oldGod
+        oldGod = hookmetamethod(game, "__namecall", function(self, ...)
+            local m = getnamecallmethod()
+            if (m == "FireServer" or m == "InvokeServer") and self == mobRemote then
+                local args = {...}
+                local data = LP:FindFirstChild("Data")
+                local dragons = data and data:FindFirstChild("Dragons")
+                if args[1] and dragons and args[1].Parent == dragons then return end
+            end
+            return oldGod(self, ...)
+        end)
+        print("[s1] ✅ Godmode")
+    else
+        warn("[s1] ⚠ MobDamageRemote ไม่เจอ — godmode skip")
+    end
+end
+
+----------------------------------------------------
+-- 5. WORLD CHECKS
+----------------------------------------------------
+local function isTutorialDone()
+    local g = LP.Data.Worlds:FindFirstChild("Grassland")
+    return g and g.Value == true
+end
+
+local function isUCUnlocked()
+    local uc = LP.Data.Worlds:FindFirstChild("Undercity")
+    return uc and uc.Value == true
+end
+
+local function isShinrinUnlocked()
+    local s = LP.Data.Worlds:FindFirstChild("Shinrin")
+    return s and s.Value == true
+end
+
+local function inShinrin() return game.PlaceId == SHINRIN_PLACE_ID end
+
+----------------------------------------------------
+-- 6. SKIP TUTORIAL + TP LOBBY
+----------------------------------------------------
+if CONFIG.SKIP_TUTORIAL and not isTutorialDone() then
+    print("[s1] Tutorial ยังไม่จบ → SkipAllTutorial")
+    local SetRemote = remotes:WaitForChild("SetTutorialStageRemote", 30)
+    if SetRemote then
+        local function set(s)
+            local ok = pcall(function() SetRemote:InvokeServer(s) end)
+            print("  SetStage:", s, "→", ok and "OK" or "FAIL")
+            task.wait(0.3)
+        end
+        set("HatchingEggs")
+        set("GrowingDragon")
+        set("SkillsIntroduction")
+        set("NextWorld")
+        set("Complete")
+    end
+    local _tt = tick()
+    while not isTutorialDone() and tick() - _tt < 30 do task.wait(1) end
+
+    if CONFIG.TP_LOBBY_AFTER_TUT then
+        print("[s1] Tutorial done → TP Lobby (เซ็ตตัว) — script จะ return หลัง TP")
+        pcall(function()
+            remotes:WaitForChild("WorldTeleportRemote"):InvokeServer(LOBBY_PLACE_ID, {})
+        end)
+        return
+    end
+end
+
+----------------------------------------------------
+-- 7. RIDE DRAGON
+----------------------------------------------------
+if CONFIG.RIDE_DRAGON then
+    local function rideDragon()
+        local okS, Sonar = pcall(require, RS:WaitForChild("Sonar", 10))
+        if not okS or not Sonar then
+            warn("[s1] require Sonar fail:", Sonar)
+            return false
+        end
+
+        local okMod, PlayerWrapper, DragonClassClient, DragonService, RemoteUtils = pcall(function()
+            return Sonar("PlayerWrapper"), Sonar("DragonClassClient"),
+                   Sonar("DragonService"),  Sonar("RemoteUtils")
+        end)
+        if not okMod then
+            warn("[s1] load Sonar modules fail:", PlayerWrapper)
+            return false
+        end
+
+        local client = PlayerWrapper.GetClient()
+        pcall(function() client:yieldForCharacter() end)
+        task.wait(1)
+
+        local dragonVal = client.PlayerData
+            and client.PlayerData:FindFirstChild("Dragons")
+            and client.PlayerData.Dragons:FindFirstChild("1")
+        if not dragonVal then
+            warn("[s1] ไม่เจอ dragon slot 1")
+            return false
+        end
+
+        if not DragonService.CanEquipDragon(dragonVal, client) then
+            warn("[s1] CanEquipDragon=false (unequip zone?)")
+            return false
+        end
+
+        local EquipRemote = RemoteUtils.GetRemoteFunction("EquipDragonRemote")
+        local okE, success = pcall(EquipRemote.InvokeServer, EquipRemote, "1")
+        if not okE   then warn("[s1] equip remote error:", success) return false end
+        if not success then warn("[s1] equip return false") return false end
+
+        if DragonService.IsDragonDead(dragonVal) then
+            warn("[s1] dragon ตาย — ไม่ mount")
+            return false
+        end
+
+        DragonClassClient.MountDragonFromValue(dragonVal)
+        return true
+    end
+
+    local _rideT = tick()
+    while not isLoadingDone() and tick() - _rideT < 30 do task.wait(0.5) end
+    task.wait(2)
+    if rideDragon() then
+        print("[s1] ✅ Riding dragon")
+    else
+        print("[s1] ⚠ Ride dragon fail (จะข้าม)")
+    end
+end
+
+----------------------------------------------------
+-- 8. UNLOCK UC
+----------------------------------------------------
+if CONFIG.UNLOCK_UC and not isUCUnlocked() then
+    if game.PlaceId ~= LOBBY_PLACE_ID then
+        print(("[s1] UC locked + ไม่อยู่ Origins (place=%d) → TP Origins"):format(game.PlaceId))
+        pcall(function()
+            remotes:WaitForChild("WorldTeleportRemote"):InvokeServer(LOBBY_PLACE_ID, {})
+        end)
+        return
+    end
+
+    print("[s1] อยู่ Origins + UC ยังไม่ปลด → load `ca`")
+    task.spawn(function()
+        pcall(function()
+            loadstring(game:HttpGet(WORLD_OPENER_URL))()
+        end)
+    end)
+    local _tt = tick()
+    while not isUCUnlocked() and tick() - _tt < CONFIG.UC_UNLOCK_TIMEOUT do
+        task.wait(5)
+    end
+    if isUCUnlocked() then
+        print(("[s1] ✅ UC ปลดแล้ว (%.1fs)"):format(tick() - _tt))
+    else
+        warn(("[s1] ⚠ UC ยังไม่ปลด (timeout %ds) — ข้ามไป"):format(CONFIG.UC_UNLOCK_TIMEOUT))
+    end
+end
+
+----------------------------------------------------
+-- 8.5. AUTO-CLAIM SEASON MISSIONS (Daily/Weekly) — event-driven
+----------------------------------------------------
+-- verified: RS.Remotes.ClaimSeasonMissionRemote:InvokeServer(typeIdx, missionIdx)
+-- typeIdx → Daily=1, Weekly=2
+-- structure: LP.Data.Seasons.Missions.{Daily/Weekly}.<index>
+-- เงื่อนไข: ต้องอยู่ guild แล้ว
+do
+    local guild = LP.Data and LP.Data:FindFirstChild("Guild")
+    local current = guild and guild.Value or ""
+    if current == "" then
+        print("[s1] ⏭ ไม่อยู่ guild → skip auto-claim season missions")
+    else
+        local claimRemote = remotes and remotes:FindFirstChild("ClaimSeasonMissionRemote")
+        local seasonsData = LP.Data and LP.Data:FindFirstChild("Seasons")
+        local missionsRoot = seasonsData and seasonsData:FindFirstChild("Missions")
+
+        if not (claimRemote and missionsRoot) then
+            warn("[s1] ⚠ ClaimSeasonMissionRemote หรือ Data.Seasons.Missions ไม่เจอ — skip")
+        else
+            local TYPE_MAP = { Daily = 1, Weekly = 2 }
+
+            local function tryClaim(mission, typeName, typeIdx)
+                local comp = mission:FindFirstChild("Completed")
+                local claimedV = mission:FindFirstChild("Claimed")
+                if not (comp and comp.Value and claimedV and not claimedV.Value) then return end
+                local idx = tonumber(mission.Name)
+                if not idx then return end
+                local ok, result = pcall(function()
+                    return claimRemote:InvokeServer(typeIdx, idx)
+                end)
+                if ok and result == true then
+                    print(("[s1] ✅ claimed %s.%s (typeIdx=%d, idx=%d)"):format(typeName, mission.Name, typeIdx, idx))
+                else
+                    warn(("[s1] ⚠ claim fail %s.%s — ok=%s result=%s"):format(
+                        typeName, mission.Name, tostring(ok), tostring(result)))
+                end
+            end
+
+            local function hookMission(mission, typeName, typeIdx)
+                tryClaim(mission, typeName, typeIdx)
+                local comp = mission:FindFirstChild("Completed")
+                if comp then
+                    comp:GetPropertyChangedSignal("Value"):Connect(function()
+                        tryClaim(mission, typeName, typeIdx)
+                    end)
+                end
+            end
+
+            local function hookType(typeName, typeIdx)
+                local typeFolder = missionsRoot:FindFirstChild(typeName)
+                if not typeFolder then
+                    warn(("[s1] ⚠ Missions.%s ไม่เจอ"):format(typeName))
+                    return
+                end
+                for _, m in ipairs(typeFolder:GetChildren()) do
+                    task.spawn(hookMission, m, typeName, typeIdx)
+                end
+                typeFolder.ChildAdded:Connect(function(m)
+                    hookMission(m, typeName, typeIdx)
+                end)
+            end
+
+            for typeName, typeIdx in pairs(TYPE_MAP) do
+                hookType(typeName, typeIdx)
+            end
+            print("[s1] ✅ Season mission auto-claim hooked (Daily + Weekly)")
+        end
+    end
+end
+
+----------------------------------------------------
+-- 8.6. AUTO-CLAIM GUILD TASKS (event-driven, ไม่ polling)
+----------------------------------------------------
+-- Listen Completed:GetPropertyChangedSignal("Value") ของ task ทุกตัวใน PointTasks
+-- เงื่อนไข: ต้องอยู่ guild
+do
+    local guild = LP.Data and LP.Data:FindFirstChild("Guild")
+    local current = guild and guild.Value or ""
+    if current == "" then
+        print("[s1] ⏭ ไม่อยู่ guild → skip auto-claim guild tasks")
+    else
+        local claimRemote = remotes and remotes:FindFirstChild("ClaimGuildTaskRemote")
+        local g  = LP.Data and LP.Data:FindFirstChild("Guild")
+        local pt = g and g:FindFirstChild("PointTasks")
+        if not pt then
+            local gv = LP:FindFirstChild("GuildValue")
+            pt = gv and gv:FindFirstChild("PointTasks")
+        end
+
+        if not (claimRemote and pt) then
+            warn("[s1] ⚠ ClaimGuildTaskRemote หรือ PointTasks ไม่เจอ — skip")
+        else
+            local function tryClaim(task_)
+                local completed = task_:FindFirstChild("Completed")
+                local claimedV  = task_:FindFirstChild("Claimed")
+                if completed and completed.Value and claimedV and not claimedV.Value then
+                    local ok = pcall(function() claimRemote:InvokeServer(task_.Name) end)
+                    if ok then
+                        print(("[s1] ✅ claimed guild task [%s]"):format(task_.Name))
+                    else
+                        warn(("[s1] ⚠ claim guild task [%s] fail"):format(task_.Name))
+                    end
+                end
+            end
+
+            local function hookTask(task_)
+                local completed = task_:WaitForChild("Completed", 5)
+                if not completed then return end
+                tryClaim(task_)
+                completed:GetPropertyChangedSignal("Value"):Connect(function()
+                    tryClaim(task_)
+                end)
+            end
+
+            for _, t in ipairs(pt:GetChildren()) do
+                task.spawn(hookTask, t)
+            end
+            pt.ChildAdded:Connect(hookTask)
+
+            print(("[s1] ✅ Guild task auto-claim hooked (%d tasks)"):format(#pt:GetChildren()))
+        end
+    end
+end
+
+----------------------------------------------------
+-- 9. PROGRESS TO SHINRIN
+----------------------------------------------------
+if CONFIG.PROGRESS_TO_SHINRIN and not isShinrinUnlocked() then
+    print(("[s1] Shinrin ยังไม่ปลด → รอ %ds ก่อน load `f`"):format(CONFIG.PRELOAD_WAIT))
+    task.wait(CONFIG.PRELOAD_WAIT)
+    loadstring(game:HttpGet(WORLD_CLIMB_URL))()
+    return
+end
+
+print("[s1] ✅ Shinrin ปลดแล้ว")
+
+----------------------------------------------------
+-- 10. SHINRIN REACHED — Horst_AccountChangeDone
+----------------------------------------------------
+if not inShinrin() then
+    print(("[s1] Shinrin ปลดแล้วแต่อยู่ place=%d → TP Shinrin"):format(game.PlaceId))
+    pcall(function()
+        remotes:WaitForChild("WorldTeleportRemote"):InvokeServer(SHINRIN_PLACE_ID, {})
+    end)
+    return
+end
+
+pcall(function()
+    if _G.Horst_AccountChangeDone then
+        _G.Horst_AccountChangeDone()
+        print("[s1] ✅ Horst_AccountChangeDone() called — switch account")
+    else
+        warn("[s1] ⚠ _G.Horst_AccountChangeDone ไม่เจอ")
+    end
+end)
+
+print("[s1] ✅ ภารกิจเสร็จ")
