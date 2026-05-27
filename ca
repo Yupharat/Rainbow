@@ -538,7 +538,7 @@ local function farmKillBoss(worldName)
 
     local function isFightOver()
         local inst = getMyInstance()
-        if not inst then return true end
+        if not inst then return nil end   -- ★ unknown ≠ over (กัน race ก่อน instance replicate)
         local dead = inst:FindFirstChild("Dead")
         local fe   = inst:FindFirstChild("FightEnd")
         return (dead and dead.Value == true) or (fe and fe.Value == true)
@@ -580,10 +580,11 @@ local function farmKillBoss(worldName)
     end
 
     -- create queue
-    local createRemote = RS.Remotes:FindFirstChild("CreateBossQueueRemote")
-    local startRemote  = RS.Remotes:FindFirstChild("StartBossQueueRemote")
-    local tpRemote     = RS.Remotes:FindFirstChild("GetTeleportRemote")
-    if not createRemote or not startRemote or not tpRemote then
+    local createRemote    = RS.Remotes:FindFirstChild("CreateBossQueueRemote")
+    local startRemote     = RS.Remotes:FindFirstChild("StartBossQueueRemote")
+    local tpRemote        = RS.Remotes:FindFirstChild("GetTeleportRemote")
+    local setDragonRemote = RS.Remotes:FindFirstChild("SetBossDragonRemote")
+    if not createRemote or not startRemote or not tpRemote or not setDragonRemote then
         warn("KillBoss: ไม่เจอ remotes") return
     end
 
@@ -603,19 +604,39 @@ local function farmKillBoss(worldName)
     end
     if not ok_ then warn("KillBoss: สร้างห้องไม่ได้") return end
 
-    task.wait(1)
-    pcall(function() startRemote:InvokeServer() end)
+    -- ★ Set boss dragon BEFORE start (dump 157013-157016 CanStartBoss เช็ค Dragon.Value)
+    --   dump 205848: SetBossDragonRemote:InvokeServer(dragon.Name) → "1" = slot 1
+    task.wait(0.5)
+    local okD, resD = pcall(function() return setDragonRemote:InvokeServer("1") end)
+    if not okD or resD ~= true then
+        warn("KillBoss: SetBossDragon fail:", tostring(resD)); return
+    end
+    print("🐉 Dragon set for boss fight")
+    task.wait(0.5)
+
+    -- ★ Start fight — เช็ค return + retry (dump 205330-205334 game's official pattern)
+    local startOk = false
+    for i = 1, 5 do
+        local ok, result = pcall(function() return startRemote:InvokeServer() end)
+        if ok and result == true then startOk = true; break end
+        warn(("KillBoss: Start fail attempt %d: %s"):format(i, tostring(result)))
+        task.wait(2)
+    end
+    if not startOk then warn("KillBoss: Start retry หมด — abort"); return end
+
     task.wait(2)
     pcall(function() tpRemote:InvokeServer("ToBossInstance", {FightId=myFightId, Spawn=true}) end)
 
-    -- ★ รอ boss model + character respawn เสร็จ ก่อนเริ่ม attack loop (timeout 3s)
+    -- ★ รอ BossInstance + boss model + character (timeout 10s)
+    --   ใช้ getMyInstance() — boss model name = inst.Name (server-assigned) ไม่ใช่ myFightId
     print("🕐 รอ boss instance + character load...")
     local _bt = tick()
-    while tick() - _bt < 3 do
+    while tick() - _bt < 10 do
+        local inst = getMyInstance()
         local activeBosses = workspace:FindFirstChild("ActiveBossModels")
-        local boss = activeBosses and activeBosses:FindFirstChild(myFightId)
+        local boss = inst and activeBosses and activeBosses:FindFirstChild(inst.Name)
         local root = getRoot()
-        if boss and boss.PrimaryPart and root and root.Parent then
+        if inst and boss and boss.PrimaryPart and root and root.Parent then
             print(("✅ Boss + character ready (%.1fs)"):format(tick() - _bt))
             break
         end
@@ -659,9 +680,15 @@ local function farmKillBoss(worldName)
         end
     end)
 
-    -- fight loop (เหมือน standalone + หยุดเมื่อ mission done)
+    -- fight loop — exit เมื่อ mission done / fight over / timeout
     local lastStage = 0
+    local fightT0 = tick()
+    local MAX_FIGHT_TIME = 120   -- ★ overall timeout กัน hang
+    local noInstSince = nil
     while task.wait(0.5) and not isMissionDone(worldName, "KillBoss") do
+        if tick() - fightT0 > MAX_FIGHT_TIME then
+            warn(("⚠ KillBoss timeout %ds — abort"):format(MAX_FIGHT_TIME)); break
+        end
         local bossData = findBoss_()
         if bossData then
             local root = getRoot()
@@ -691,9 +718,18 @@ local function farmKillBoss(worldName)
             end
         else
             currentTarget = nil
-            if isFightOver() then
-                print("✅ Fight จบ")
-                break
+            local over = isFightOver()
+            if over == true then
+                print("✅ Fight จบ"); break
+            end
+            -- over == nil → instance ยังไม่ replicate, track stuck duration
+            if over == nil then
+                if not noInstSince then noInstSince = tick() end
+                if tick() - noInstSince > 15 then
+                    warn("⚠ no instance > 15s — abort"); break
+                end
+            else
+                noInstSince = nil
             end
             task.wait(3)
         end
