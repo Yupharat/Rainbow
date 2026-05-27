@@ -40,6 +40,26 @@ local waypoints = {
     Vector3.new(-2960.810, 283.664, -1598.804),
 }
 
+-- ★ Performance: live particle cleanup + lighting + low quality (กัน FPS drop ระยะยาว)
+task.spawn(function()
+    local Lighting = game:GetService("Lighting")
+    pcall(function() settings().Rendering.QualityLevel = Enum.QualityLevel.Level01 end)
+    for _, v in ipairs(Lighting:GetChildren()) do
+        if v:IsA("PostEffect") or v:IsA("Atmosphere") or v:IsA("Sky") then
+            pcall(function() v:Destroy() end)
+        end
+    end
+    Lighting.GlobalShadows = false
+    Lighting.FogEnd = 9e9
+    workspace.DescendantAdded:Connect(function(obj)
+        if obj:IsA("ParticleEmitter") or obj:IsA("Beam") or obj:IsA("Trail")
+           or obj:IsA("Fire") or obj:IsA("Smoke") then
+            if obj.Parent and obj.Parent:IsA("Attachment") then return end
+            pcall(function() obj:Destroy() end)
+        end
+    end)
+end)
+
 local _t = tick()
 repeat task.wait(0.5) until (LP:FindFirstChild("Data") and LP.Data:FindFirstChild("Resources")) or (tick()-_t > 15)
 
@@ -183,14 +203,13 @@ end)
 task.spawn(function()
     local char   = LP.Character
     local dragon = char:WaitForChild("Dragons"):WaitForChild("1")
-    local breath = dragon.Remotes.BreathFireRemote
     local sound  = dragon.Remotes.PlaySoundRemote
     while true do
         local t = findNearestFood()
         if t then
             for _ = 1, MULTI_HIT do
+                -- ★ skip breath:FireServer(true) — animation only, ไม่ทำ damage (research_damage.lua)
                 pcall(function()
-                    breath:FireServer(true)
                     sound:FireServer("Breath", "Destructibles", t.billboard)
                 end)
             end
