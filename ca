@@ -522,6 +522,22 @@ local function farmKillBoss(worldName)
 
     -- ── ใช้โค้ดเดียวกับ KillBoss.lua standalone ──
 
+    -- ★ KillBoss done = Progress >= 1 (objective จริง) หรือ Value=true (claimed)
+    --   dump 163035: CanClaimMission → Progress.Value >= RequiredAmount(KillBoss=1)
+    --   ไม่ใช้ isMissionDone global (เช็คแค่ .Value=claimed → ข้ามทั้งที่ยังไม่ตี)
+    local function bossMissionDone()
+        local missions = LP:FindFirstChild("Data")
+            and LP.Data:FindFirstChild("WorldMissions")
+            and LP.Data.WorldMissions:FindFirstChild(worldName)
+            and LP.Data.WorldMissions[worldName]:FindFirstChild("Missions")
+        local m = missions and missions:FindFirstChild("KillBoss")
+        if not m then return false end
+        if m.Value == true then return true end           -- claimed
+        local prog = m:FindFirstChild("Progress")
+        if prog and prog.Value >= 1 then return true end  -- ★ objective สำเร็จ
+        return false
+    end
+
     local myFightId = os.time().."-"..LP.Name
 
     local function getMyInstance()
@@ -579,164 +595,175 @@ local function farmKillBoss(worldName)
         return nearest
     end
 
-    -- create queue
+    -- remotes
     local createRemote    = RS.Remotes:FindFirstChild("CreateBossQueueRemote")
     local startRemote     = RS.Remotes:FindFirstChild("StartBossQueueRemote")
     local tpRemote        = RS.Remotes:FindFirstChild("GetTeleportRemote")
     local setDragonRemote = RS.Remotes:FindFirstChild("SetBossDragonRemote")
+    local leaveRemote     = RS.Remotes:FindFirstChild("LeaveBossInstanceRemote")
     if not createRemote or not startRemote or not tpRemote or not setDragonRemote then
         warn("KillBoss: ไม่เจอ remotes") return
     end
 
-    local MAX_FAIL = 5
-    local failCount = 0
-    local ok_ = false
-    while failCount < MAX_FAIL do
-        local ok2, result = pcall(function() return createRemote:InvokeServer("Everyone") end)
-        if ok2 then
-            myFightId = type(result) == "string" and result or (os.time().."-"..LP.Name)
-            print("🎫 FightId:", myFightId)
-            ok_ = true
-            break
-        end
-        failCount += 1
-        task.wait(3)
-    end
-    if not ok_ then warn("KillBoss: สร้างห้องไม่ได้") return end
-
-    -- ★ Set boss dragon BEFORE start (dump 157013-157016 CanStartBoss เช็ค Dragon.Value)
-    --   dump 205848: SetBossDragonRemote:InvokeServer(dragon.Name) → "1" = slot 1
-    task.wait(0.5)
-    local okD, resD = pcall(function() return setDragonRemote:InvokeServer("1") end)
-    if not okD or resD ~= true then
-        warn("KillBoss: SetBossDragon fail:", tostring(resD)); return
-    end
-    print("🐉 Dragon set for boss fight")
-    task.wait(0.5)
-
-    -- ★ Start fight — เช็ค return + retry (dump 205330-205334 game's official pattern)
-    local startOk = false
-    for i = 1, 5 do
-        local ok, result = pcall(function() return startRemote:InvokeServer() end)
-        if ok and result == true then startOk = true; break end
-        warn(("KillBoss: Start fail attempt %d: %s"):format(i, tostring(result)))
-        task.wait(2)
-    end
-    if not startOk then warn("KillBoss: Start retry หมด — abort"); return end
-
-    task.wait(2)
-    pcall(function() tpRemote:InvokeServer("ToBossInstance", {FightId=myFightId, Spawn=true}) end)
-
-    -- ★ รอ BossInstance + boss model + character (timeout 10s)
-    --   ใช้ getMyInstance() — boss model name = inst.Name (server-assigned) ไม่ใช่ myFightId
-    print("🕐 รอ boss instance + character load...")
-    local _bt = tick()
-    while tick() - _bt < 10 do
-        local inst = getMyInstance()
-        local activeBosses = workspace:FindFirstChild("ActiveBossModels")
-        local boss = inst and activeBosses and activeBosses:FindFirstChild(inst.Name)
-        local root = getRoot()
-        if inst and boss and boss.PrimaryPart and root and root.Parent then
-            print(("✅ Boss + character ready (%.1fs)"):format(tick() - _bt))
-            break
-        end
-        task.wait(0.3)
-    end
-
-    -- auto attack (เหมือน standalone)
-    local currentTarget    = nil
-    local currentTargetType = "Bosses"
-    local stopped = false
-
-    -- ★ Auto-remount loop: เช็คทุก 1.5s ถ้าตกมังกร (CurrentDragon == nil) → mount ใหม่
-    task.spawn(function()
-        while not stopped do
-            task.wait(1.5)
-            if not isMounted() then
-                print("⚠ ตกมังกร → remount")
-                mountDragon()
-            end
-        end
-    end)
-
-    task.spawn(function()
-        repeat task.wait(0.1) until LP.Character
-        local char    = LP.Character
-        local dragons = char:WaitForChild("Dragons", 10)
-        if not dragons then return end
-        local dragon  = dragons:WaitForChild("1", 10)
-        if not dragon  then return end
-        local remotes = dragon:WaitForChild("Remotes", 10)
-        if not remotes then return end
-        local breath  = remotes:WaitForChild("BreathFireRemote", 10)
-        local sound   = remotes:WaitForChild("PlaySoundRemote", 10)
-        print("✅ Dragon loaded")
-        while not stopped do
-            task.wait(0.1)
-            if currentTarget and currentTarget.part then
-                if breath then pcall(function() breath:FireServer(true) end) end
-                if sound  then pcall(function() sound:FireServer("Breath", currentTargetType, currentTarget.part) end) end
-            end
-        end
-    end)
-
-    -- fight loop — exit เมื่อ mission done / fight over / timeout
-    local lastStage = 0
-    local fightT0 = tick()
-    local MAX_FIGHT_TIME = 120   -- ★ overall timeout กัน hang
-    local noInstSince = nil
-    while task.wait(0.5) and not isMissionDone(worldName, "KillBoss") do
-        if tick() - fightT0 > MAX_FIGHT_TIME then
-            warn(("⚠ KillBoss timeout %ds — abort"):format(MAX_FIGHT_TIME)); break
-        end
-        local bossData = findBoss_()
-        if bossData then
-            local root = getRoot()
-            if root then
-                if bossData.stage ~= lastStage then
-                    print("📍 Stage", bossData.stage)
-                    lastStage = bossData.stage
-                end
-                if bossData.stage == 2 then
-                    -- ★ scan เฉพาะ stage mob ใกล้บอส (กัน Tundra wild mob)
-                    local mob = findStageMob(bossData.part.Position)
-                    if mob then
-                        root.CFrame = CFrame.new(mob.Position + Vector3.new(0,10,0), mob.Position)
-                        currentTarget     = { part = mob }
-                        currentTargetType = "Mobs"
-                        task.wait(1)
-                    else
-                        currentTarget = nil
-                        task.wait(0.5)
-                    end
-                else
-                    root.CFrame = CFrame.new(bossData.part.Position + Vector3.new(0,10,30), bossData.part.Position)
-                    currentTarget     = bossData
-                    currentTargetType = "Bosses"
-                    task.wait(1)
-                end
-            end
-        else
-            currentTarget = nil
-            local over = isFightOver()
-            if over == true then
-                print("✅ Fight จบ"); break
-            end
-            -- over == nil → instance ยังไม่ replicate, track stuck duration
-            if over == nil then
-                if not noInstSince then noInstSince = tick() end
-                if tick() - noInstSince > 15 then
-                    warn("⚠ no instance > 15s — abort"); break
-                end
-            else
-                noInstSince = nil
+    -- ★ doOneFight: create → set dragon → start → TP → fight (timeout 3 นาที/รอบ)
+    --   return หลัง fight จบ/timeout — caller เช็ค isMissionDone เอง
+    local function doOneFight()
+        -- create queue (retry 5)
+        myFightId = os.time().."-"..LP.Name
+        local ok_ = false
+        for _ = 1, 5 do
+            local ok2, result = pcall(function() return createRemote:InvokeServer("Everyone") end)
+            if ok2 then
+                myFightId = type(result) == "string" and result or (os.time().."-"..LP.Name)
+                print("🎫 FightId:", myFightId)
+                ok_ = true
+                break
             end
             task.wait(3)
         end
+        if not ok_ then warn("KillBoss: สร้างห้องไม่ได้"); return end
+
+        -- ★ Set boss dragon BEFORE start (dump 157013-157016 CanStartBoss เช็ค Dragon.Value)
+        --   dump 205848: SetBossDragonRemote:InvokeServer("1") → slot 1
+        task.wait(0.5)
+        local okD, resD = pcall(function() return setDragonRemote:InvokeServer("1") end)
+        if not okD or resD ~= true then warn("KillBoss: SetBossDragon fail:", tostring(resD)); return end
+        print("🐉 Dragon set for boss fight")
+        task.wait(0.5)
+
+        -- ★ Start fight — เช็ค return + retry (dump 205330-205334)
+        local startOk = false
+        for i = 1, 5 do
+            local ok, result = pcall(function() return startRemote:InvokeServer() end)
+            if ok and result == true then startOk = true; break end
+            warn(("KillBoss: Start fail attempt %d: %s"):format(i, tostring(result)))
+            task.wait(2)
+        end
+        if not startOk then warn("KillBoss: Start retry หมด"); return end
+
+        task.wait(2)
+        pcall(function() tpRemote:InvokeServer("ToBossInstance", {FightId=myFightId, Spawn=true}) end)
+
+        -- ★ รอ BossInstance + boss model + character (timeout 10s)
+        print("🕐 รอ boss instance + character load...")
+        local _bt = tick()
+        while tick() - _bt < 10 do
+            local inst = getMyInstance()
+            local activeBosses = workspace:FindFirstChild("ActiveBossModels")
+            local boss = inst and activeBosses and activeBosses:FindFirstChild(inst.Name)
+            local root = getRoot()
+            if inst and boss and boss.PrimaryPart and root and root.Parent then
+                print(("✅ Boss + character ready (%.1fs)"):format(tick() - _bt))
+                break
+            end
+            task.wait(0.3)
+        end
+
+        -- attack state (local ต่อรอบ)
+        local currentTarget    = nil
+        local currentTargetType = "Bosses"
+        local stopped = false
+
+        -- auto-remount loop
+        task.spawn(function()
+            while not stopped do
+                task.wait(1.5)
+                if not isMounted() then print("⚠ ตกมังกร → remount"); mountDragon() end
+            end
+        end)
+
+        -- auto-attack loop
+        task.spawn(function()
+            repeat task.wait(0.1) until LP.Character
+            local char    = LP.Character
+            local dragons = char:WaitForChild("Dragons", 10); if not dragons then return end
+            local dragon  = dragons:WaitForChild("1", 10);    if not dragon  then return end
+            local remotes = dragon:WaitForChild("Remotes", 10); if not remotes then return end
+            local breath  = remotes:WaitForChild("BreathFireRemote", 10)
+            local sound   = remotes:WaitForChild("PlaySoundRemote", 10)
+            print("✅ Dragon loaded")
+            while not stopped do
+                task.wait(0.1)
+                if currentTarget and currentTarget.part then
+                    if breath then pcall(function() breath:FireServer(true) end) end
+                    if sound  then pcall(function() sound:FireServer("Breath", currentTargetType, currentTarget.part) end) end
+                end
+            end
+        end)
+
+        -- fight loop — exit เมื่อ mission done / fight over / 3-min timeout / no-instance
+        local lastStage = 0
+        local fightT0 = tick()
+        local MAX_FIGHT_TIME = 180   -- ★ 3 นาที/รอบ → recreate
+        local noInstSince = nil
+        while task.wait(0.5) and not bossMissionDone() do
+            if tick() - fightT0 > MAX_FIGHT_TIME then
+                warn(("⚠ KillBoss timeout %ds — สร้างใหม่"):format(MAX_FIGHT_TIME)); break
+            end
+            local bossData = findBoss_()
+            if bossData then
+                noInstSince = nil
+                local root = getRoot()
+                if root then
+                    if bossData.stage ~= lastStage then
+                        print("📍 Stage", bossData.stage)
+                        lastStage = bossData.stage
+                    end
+                    if bossData.stage == 2 then
+                        local mob = findStageMob(bossData.part.Position)
+                        if mob then
+                            root.CFrame = CFrame.new(mob.Position + Vector3.new(0,10,0), mob.Position)
+                            currentTarget     = { part = mob }
+                            currentTargetType = "Mobs"
+                            task.wait(1)
+                        else
+                            currentTarget = nil
+                            task.wait(0.5)
+                        end
+                    else
+                        root.CFrame = CFrame.new(bossData.part.Position + Vector3.new(0,10,30), bossData.part.Position)
+                        currentTarget     = bossData
+                        currentTargetType = "Bosses"
+                        task.wait(1)
+                    end
+                end
+            else
+                currentTarget = nil
+                local over = isFightOver()
+                if over == true then print("✅ Fight จบ"); break end
+                if over == nil then
+                    if not noInstSince then noInstSince = tick() end
+                    if tick() - noInstSince > 15 then warn("⚠ no instance > 15s"); break end
+                else
+                    noInstSince = nil
+                end
+                task.wait(3)
+            end
+        end
+
+        stopped = true   -- หยุด attack/remount loops ของรอบนี้
     end
 
-    stopped = true
-    print("✅ KillBoss done")
+    -- ★ Outer loop: สร้าง+ตี ใหม่จน mission done (กัน case ข้ามแบบยังไม่ตี/บอสไม่ตาย)
+    --   3 นาที/รอบ — ถ้ายังไม่เคลียร์ → leave instance เก่า (กัน MaxInstances) → สร้างใหม่
+    local MAX_ATTEMPTS = 5
+    for attempt = 1, MAX_ATTEMPTS do
+        if bossMissionDone() then break end
+        print(("🐲 KillBoss attempt %d/%d"):format(attempt, MAX_ATTEMPTS))
+        if attempt > 1 and leaveRemote then
+            pcall(function() leaveRemote:InvokeServer() end)   -- dump 204351
+            task.wait(2)
+        end
+        doOneFight()
+        if bossMissionDone() then break end
+        task.wait(3)
+    end
+
+    if bossMissionDone() then
+        print("✅ KillBoss done")
+    else
+        warn(("⚠ KillBoss ไม่สำเร็จหลัง %d attempts — ข้าม"):format(MAX_ATTEMPTS))
+    end
 end
 
 -- TreasureChest
