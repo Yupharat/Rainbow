@@ -55,6 +55,24 @@ local WORLD_MAP = {
 }
 
 ----------------------------------------------------
+-- WATCHDOG: เกิน 7:50 (470s) หลังโหลด → TP Origins (กัน stuck นานเกิน)
+----------------------------------------------------
+local ORIGINS_PLACE_ID = 3475397644
+task.spawn(function()
+    local startT = tick()
+    repeat task.wait(5) until tick() - startT > 470
+    if game.PlaceId ~= ORIGINS_PLACE_ID then
+        print("[cac] ⏰ เกิน 7:50 หลังโหลด → TP Origins")
+        pcall(function()
+            local tp = RS:WaitForChild("Remotes"):WaitForChild("WorldTeleportRemote", 10)
+            if tp then tp:InvokeServer(ORIGINS_PLACE_ID, {}) end
+        end)
+    else
+        print("[cac] ⏰ เกิน 7:50 — อยู่ Origins อยู่แล้ว skip")
+    end
+end)
+
+----------------------------------------------------
 -- UTILS
 ----------------------------------------------------
 local function getRoot()
