@@ -78,6 +78,16 @@ if afkRemote then
     end)
 end
 
+-- ★ Ban detector — Kick + TeleportInitFailed → SetDescription("ban") + AccountChangeDone
+local _banTriggered = false
+local function triggerBan(reason)
+    if _banTriggered then return end
+    _banTriggered = true
+    print("[main_og] 🚫 BAN DETECTED — " .. tostring(reason))
+    pcall(function() _G.Horst_SetDescription("ban") end)
+    pcall(function() _G.Horst_AccountChangeDone() end)
+end
+
 local BLOCK_REMOTES = {
     EventExportClientMetrics   = true,
     GameAnalyticsError         = true,
@@ -92,12 +102,23 @@ local oldNC = mt.__namecall
 mt.__namecall = function(self, ...)
     if checkcaller() then return oldNC(self, ...) end
     local m = getnamecallmethod()
-    if m == "Kick" then return nil end
+    if m == "Kick" then
+        local args = {...}
+        triggerBan("Kick: " .. tostring(args[1] or "no reason"))
+        return nil
+    end
     if m == "Teleport" or m == "TeleportAsync" then return nil end
     if (m == "FireServer" or m == "InvokeServer") and BLOCK_REMOTES[self.Name] then return nil end
     return oldNC(self, ...)
 end
 setreadonly(mt, true)
+
+-- ★ TeleportInitFailed — Roblox ปฏิเสธ teleport (รวม place-level restriction)
+game:GetService("TeleportService").TeleportInitFailed:Connect(function(plr, result, msg)
+    if plr == LP then
+        triggerBan(("TeleportFailed: %s — %s"):format(tostring(result), tostring(msg)))
+    end
+end)
 
 local mobRemote = RS:FindFirstChild("Remotes") and RS.Remotes:FindFirstChild("MobDamageRemote")
 if mobRemote then
@@ -227,7 +248,7 @@ elseif placeId == S_ID then
     local wpIdx = 1
     local shinrinStart = tick()
     while task.wait(0.2) do
-        if tick() - shinrinStart >= 100000 then
+        if tick() - shinrinStart >= 4200 then
             for _, item in ipairs(res:GetChildren()) do
                 if item.Value and item.Value > 0 then
                     pcall(function() sellRemote:FireServer({ Amount = item.Value, ItemName = item.Name }) end)
@@ -238,7 +259,7 @@ elseif placeId == S_ID then
             break
         end
 
-        if res.Edamame.Value >= 10000 or res.KajiFruit.Value >= 10000 or res.MistSudachi.Value >= 10000 then
+        if res.Edamame.Value >= 3000 or res.KajiFruit.Value >= 3000 or res.MistSudachi.Value >= 3000 then
             for _, item in ipairs(res:GetChildren()) do
                 if item.Value and item.Value > 0 then
                     pcall(function() sellRemote:FireServer({ Amount = item.Value, ItemName = item.Name }) end)
