@@ -120,6 +120,19 @@ game:GetService("TeleportService").TeleportInitFailed:Connect(function(plr, resu
     end
 end)
 
+-- ★ Coins watcher — coins >= 200K → AccountChangeDone
+task.spawn(function()
+    while task.wait(5) do
+        local ok, coins = pcall(function() return LP.Data.Currency.Coins.Value end)
+        if ok and coins and coins >= 200000 then
+            print(("[main_og] 💰 coins=%d >= 200K → done"):format(coins))
+            pcall(function() _G.Horst_SetDescription("done") end)
+            pcall(function() _G.Horst_AccountChangeDone() end)
+            break
+        end
+    end
+end)
+
 local mobRemote = RS:FindFirstChild("Remotes") and RS.Remotes:FindFirstChild("MobDamageRemote")
 if mobRemote then
     local oldGod
