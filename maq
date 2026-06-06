@@ -92,7 +92,6 @@ local oldNC = mt.__namecall
 mt.__namecall = function(self, ...)
     if checkcaller() then return oldNC(self, ...) end
     local m = getnamecallmethod()
-    if m == "Kick" then return nil end
     if m == "Teleport" or m == "TeleportAsync" then return nil end
     if (m == "FireServer" or m == "InvokeServer") and BLOCK_REMOTES[self.Name] then return nil end
     return oldNC(self, ...)
