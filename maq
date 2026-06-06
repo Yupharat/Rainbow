@@ -10,11 +10,6 @@ local LP = Players.LocalPlayer
 repeat task.wait() until LP.Character
 task.wait(3)
 
-if #Players:GetPlayers() > 4 then
-    LP:Kick()
-    return
-end
-
 local O_ID = 3475397644
 local S_ID = 125804922932357
 
@@ -92,6 +87,7 @@ local oldNC = mt.__namecall
 mt.__namecall = function(self, ...)
     if checkcaller() then return oldNC(self, ...) end
     local m = getnamecallmethod()
+    if m == "Kick" then return nil end
     if m == "Teleport" or m == "TeleportAsync" then return nil end
     if (m == "FireServer" or m == "InvokeServer") and BLOCK_REMOTES[self.Name] then return nil end
     return oldNC(self, ...)
