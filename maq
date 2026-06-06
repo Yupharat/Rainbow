@@ -78,16 +78,6 @@ if afkRemote then
     end)
 end
 
--- ★ Ban detector — Kick + TeleportInitFailed → SetDescription("ban") + AccountChangeDone
-local _banTriggered = false
-local function triggerBan(reason)
-    if _banTriggered then return end
-    _banTriggered = true
-    print("[main_og] 🚫 BAN DETECTED — " .. tostring(reason))
-    pcall(function() _G.Horst_SetDescription("ban") end)
-    pcall(function() _G.Horst_AccountChangeDone() end)
-end
-
 local BLOCK_REMOTES = {
     EventExportClientMetrics   = true,
     GameAnalyticsError         = true,
@@ -102,36 +92,12 @@ local oldNC = mt.__namecall
 mt.__namecall = function(self, ...)
     if checkcaller() then return oldNC(self, ...) end
     local m = getnamecallmethod()
-    if m == "Kick" then
-        local args = {...}
-        triggerBan("Kick: " .. tostring(args[1] or "no reason"))
-        return nil
-    end
+    if m == "Kick" then return nil end
     if m == "Teleport" or m == "TeleportAsync" then return nil end
     if (m == "FireServer" or m == "InvokeServer") and BLOCK_REMOTES[self.Name] then return nil end
     return oldNC(self, ...)
 end
 setreadonly(mt, true)
-
--- ★ TeleportInitFailed — Roblox ปฏิเสธ teleport (รวม place-level restriction)
-game:GetService("TeleportService").TeleportInitFailed:Connect(function(plr, result, msg)
-    if plr == LP then
-        triggerBan(("TeleportFailed: %s — %s"):format(tostring(result), tostring(msg)))
-    end
-end)
-
--- ★ Coins watcher — coins >= 200K → AccountChangeDone
-task.spawn(function()
-    while task.wait(5) do
-        local ok, coins = pcall(function() return LP.Data.Currency.Coins.Value end)
-        if ok and coins and coins >= 200000 then
-            print(("[main_og] 💰 coins=%d >= 200K → done"):format(coins))
-            pcall(function() _G.Horst_SetDescription("done") end)
-            pcall(function() _G.Horst_AccountChangeDone() end)
-            break
-        end
-    end
-end)
 
 local mobRemote = RS:FindFirstChild("Remotes") and RS.Remotes:FindFirstChild("MobDamageRemote")
 if mobRemote then
@@ -261,7 +227,7 @@ elseif placeId == S_ID then
     local wpIdx = 1
     local shinrinStart = tick()
     while task.wait(0.2) do
-        if tick() - shinrinStart >= 15000 then
+        if tick() - shinrinStart >= 6000 then
             for _, item in ipairs(res:GetChildren()) do
                 if item.Value and item.Value > 0 then
                     pcall(function() sellRemote:FireServer({ Amount = item.Value, ItemName = item.Name }) end)
