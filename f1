@@ -23,7 +23,6 @@ local CONFIG = {
 }
 
 local LOBBY_PLACE_ID    = 3475397644
-local SHINRIN_PLACE_ID  = 125804922932357
 local WORLD_OPENER_URL  = "https://raw.githubusercontent.com/Yupharat/Rainbow/main/ca"
 local WORLD_CLIMB_URL   = "https://raw.githubusercontent.com/Yupharat/Rainbow/main/f"
 
@@ -238,8 +237,6 @@ local function isShinrinUnlocked()
     local s = LP.Data.Worlds:FindFirstChild("Shinrin")
     return s and s.Value == true
 end
-
-local function inShinrin() return game.PlaceId == SHINRIN_PLACE_ID end
 
 ----------------------------------------------------
 -- 6. SKIP TUTORIAL + TP LOBBY
