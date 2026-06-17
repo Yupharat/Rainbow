@@ -497,25 +497,3 @@ if CONFIG.PROGRESS_TO_SHINRIN and not isShinrinUnlocked() then
 end
 
 print("[s1] ✅ Shinrin ปลดแล้ว")
-
-----------------------------------------------------
--- 10. SHINRIN REACHED — Horst_AccountChangeDone
-----------------------------------------------------
-if not inShinrin() then
-    print(("[s1] Shinrin ปลดแล้วแต่อยู่ place=%d → TP Shinrin"):format(game.PlaceId))
-    pcall(function()
-        remotes:WaitForChild("WorldTeleportRemote"):InvokeServer(SHINRIN_PLACE_ID, {})
-    end)
-    return
-end
-
-pcall(function()
-    if _G.Horst_AccountChangeDone then
-        _G.Horst_AccountChangeDone()
-        print("[s1] ✅ Horst_AccountChangeDone() called — switch account")
-    else
-        warn("[s1] ⚠ _G.Horst_AccountChangeDone ไม่เจอ")
-    end
-end)
-
-print("[s1] ✅ ภารกิจเสร็จ")
