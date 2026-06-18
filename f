@@ -11,6 +11,27 @@ if game.PlaceId == 125804922932357 then
 end
 
 ----------------------------------------------------
+-- ★ GODMODE — block MobDamageRemote by NAME
+--   - ใช้ ".Name" แทน reference (==) → ทน cross-place TP
+--     เพราะ f ทำ TP ข้าม place หลายรอบ (Lobby→UC→...→Shinrin)
+--     reference เก่าตาย หลัง TP, ตัว name คงที่
+--   - server validate target = own dragon → ทุก fire จาก client = self-damage
+--   - dump: dumpv2:143173 (server handler), 9700/9747/9793/9839 (ailment), 141882 (projectile)
+----------------------------------------------------
+do
+    local _oldNC
+    _oldNC = hookmetamethod(game, "__namecall", function(self, ...)
+        if checkcaller() then return _oldNC(self, ...) end
+        local m = getnamecallmethod()
+        if (m == "FireServer" or m == "InvokeServer") and self.Name == "MobDamageRemote" then
+            return  -- ★ block all MobDamageRemote fires = ZERO damage from mob/ailment/projectile
+        end
+        return _oldNC(self, ...)
+    end)
+    print("[f] ✅ Godmode hook installed (by-name MobDamageRemote)")
+end
+
+----------------------------------------------------
 -- WORLD ORDER (ชื่อใน Data, PlaceId สำหรับ TP)
 ----------------------------------------------------
 local WORLD_ORDER = {
