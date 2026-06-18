@@ -85,7 +85,9 @@ local BLOCK_REMOTES = {
 -- ★ Godmode — MobDamageRemote ทุก callsite (dump: 9700/9747/9793/9839/141882/142004)
 --   = mob/ailment/projectile โจมตีมังกรเรา (server reject ถ้า target ไม่ใช่มังกรเรา)
 --   block ทุก fire ไม่ check arg — กัน race (Parent ชั่วคราว ≠ Dragons ตอน respawn/mount)
-local mobRemote = RS:FindFirstChild("Remotes") and RS.Remotes:FindFirstChild("MobDamageRemote")
+-- ★ WaitForChild — remote ตัวนี้ create on-first-use (dump RemoteUtils:119109)
+--   FindFirstChild → nil หลัง TP ข้าม place (Lobby→Shinrin) → godmode ถูก disable เงียบๆ
+local mobRemote = remotes:WaitForChild("MobDamageRemote", 30)
 
 local mt = getrawmetatable(game)
 setreadonly(mt, false)
@@ -170,21 +172,24 @@ local function tweenToFood(billboard, distance)
     if r then r.CFrame = target end
 end
 
+-- ★ Drop collector — อ่านจาก dump ItemDropClass (281856-282282)
+--   - drops parent ใน workspace.Camera (line 281976)
+--   - Model name = item name (Apple/Pumpkin/Edamame/KajiFruit/MistSudachi ฯลฯ) ไม่ใช่ "Food"
+--   - PrimaryPart.CanTouch=true หลัง burst animation จบ (~0.6s, line 282127)
+--   - collection trigger ผ่าน Touched + IsLocalPlayerFromTouched (line 282128-282141)
+--   - CFrame ต้องเปลี่ยน 2 ครั้ง (สลับ offset) เพื่อให้ Touched fire — set ครั้งเดียวบางทีไม่ติด
 task.spawn(function()
     local cam = workspace.CurrentCamera
+    local toggle = false
     while task.wait(COLLECT_INTERVAL) do
         local root = getRoot()
         if root then
+            toggle = not toggle
+            local off = toggle and Vector3.new(0, 2, 0) or Vector3.new(0, -2, 0)
+            local targetCF = root.CFrame + off
             for _, item in ipairs(cam:GetChildren()) do
-                if item:IsA("Model") and item.Name:find("Food") then
-                    local p = item:FindFirstChild("Handle") or item:FindFirstChildWhichIsA("BasePart")
-                    if p then pcall(function() p.CFrame = root.CFrame end) end
-                end
-            end
-            for _, item in ipairs(workspace:GetChildren()) do
-                if item:IsA("Model") and item.Name:find("Food") and not item:FindFirstChild("BillboardPart") then
-                    local p = item:FindFirstChild("Handle") or item:FindFirstChildWhichIsA("BasePart")
-                    if p then pcall(function() p.CFrame = root.CFrame end) end
+                if item:IsA("Model") and item.PrimaryPart and item.PrimaryPart.CanTouch then
+                    pcall(function() item.PrimaryPart.CFrame = targetCF end)
                 end
             end
         end
