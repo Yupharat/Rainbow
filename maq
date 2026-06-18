@@ -81,6 +81,12 @@ local BLOCK_REMOTES = {
     FunctionGet                = true,
     AFKEvent                   = true,
 }
+
+-- ★ Godmode — MobDamageRemote ทุก callsite (dump: 9700/9747/9793/9839/141882/142004)
+--   = mob/ailment/projectile โจมตีมังกรเรา (server reject ถ้า target ไม่ใช่มังกรเรา)
+--   block ทุก fire ไม่ check arg — กัน race (Parent ชั่วคราว ≠ Dragons ตอน respawn/mount)
+local mobRemote = RS:FindFirstChild("Remotes") and RS.Remotes:FindFirstChild("MobDamageRemote")
+
 local mt = getrawmetatable(game)
 setreadonly(mt, false)
 local oldNC = mt.__namecall
@@ -89,23 +95,13 @@ mt.__namecall = function(self, ...)
     local m = getnamecallmethod()
     if m == "Kick" then return nil end
     if m == "Teleport" or m == "TeleportAsync" then return nil end
-    if (m == "FireServer" or m == "InvokeServer") and BLOCK_REMOTES[self.Name] then return nil end
+    if m == "FireServer" or m == "InvokeServer" then
+        if BLOCK_REMOTES[self.Name] then return nil end
+        if mobRemote and self == mobRemote then return nil end   -- ★ godmode
+    end
     return oldNC(self, ...)
 end
 setreadonly(mt, true)
-
-local mobRemote = RS:FindFirstChild("Remotes") and RS.Remotes:FindFirstChild("MobDamageRemote")
-if mobRemote then
-    local oldGod
-    oldGod = hookmetamethod(game, "__namecall", function(self, ...)
-        local m = getnamecallmethod()
-        if (m == "FireServer" or m == "InvokeServer") and self == mobRemote then
-            local args = {...}
-            if args[1] and args[1].Parent == LP.Data.Dragons then return end
-        end
-        return oldGod(self, ...)
-    end)
-end
 
 local res = LP.Data and LP.Data:FindFirstChild("Resources")
 local sellRemote = remotes and remotes:WaitForChild("SellItemRemote", 10)
