@@ -8,33 +8,55 @@ local LP         = Players.LocalPlayer
 
 ----------------------------------------------------
 -- HOOK: AntiKick + AntiAFK + GodMode + AntiMetrics
+--   ★ ใช้ hookmetamethod (chain กับ f's hook) — ไม่ทับ
+--   ★ Godmode by-name (กัน reference fail หลัง cross-place TP / path ผิด)
+--   ★ Diagnostics — counter เพื่อ verify ว่า hook ทำงานจริง
 ----------------------------------------------------
 pcall(function()
-    local remotes   = RS:WaitForChild("Remotes", 10)
-    local afkRemote = remotes and remotes:WaitForChild("SetLastPlayedUpdateRemote", 5)
-    local mobRemote = remotes and remotes:FindFirstChild("MobDamageRemote")
+    _G._cac_blocked = _G._cac_blocked or 0
+    _G._cac_allowed = _G._cac_allowed or 0
 
-    local mt = getrawmetatable(game)
-    setreadonly(mt, false)
-    local _orig = mt.__namecall
-    mt.__namecall = function(self, ...)
-        if not checkcaller() then
-            local m = getnamecallmethod()
-            if m == "Kick" then return nil end
-            if m == "FireServer" and self.Name == "EventExportClientMetrics" then return end
-            if m == "FireServer" and afkRemote and self == afkRemote then return end
-            if (m == "FireServer" or m == "InvokeServer") and mobRemote and self == mobRemote then
-                local args = {...}
-                local char = LP and LP.Character
-                local drag = char and char:FindFirstChild("Dragons")
-                if drag and args[1] and args[1].Parent == drag then return end
+    local _oldNC
+    _oldNC = hookmetamethod(game, "__namecall", function(self, ...)
+        if checkcaller() then return _oldNC(self, ...) end
+        local m = getnamecallmethod()
+        if m == "Kick" then return nil end
+        if m == "FireServer" or m == "InvokeServer" then
+            local ok, n = pcall(function() return self.Name end)
+            if ok and n then
+                -- block damage in
+                if n == "MobDamageRemote" then
+                    _G._cac_blocked = _G._cac_blocked + 1
+                    if _G._cac_blocked <= 5 or _G._cac_blocked % 20 == 0 then
+                        print(("[cac] 🛡 BLOCK MobDamageRemote #%d"):format(_G._cac_blocked))
+                    end
+                    return
+                end
+                -- block AFK + metrics
+                if n == "SetLastPlayedUpdateRemote" then return end
+                if n == "EventExportClientMetrics" then return end
+                -- keep our attacks (PlaySoundRemote)
+                if n == "PlaySoundRemote" then
+                    _G._cac_allowed = _G._cac_allowed + 1
+                end
             end
         end
-        return _orig(self, ...)
+        return _oldNC(self, ...)
+    end)
+
+    if _oldNC then
+        print("[cac] ✅ Hook ON (by-name MobDamageRemote + KEEP PlaySoundRemote)")
+    else
+        warn("[cac] ❌ hook FAILED (hookmetamethod returned nil)")
     end
-    setreadonly(mt, true)
+
+    -- stats ทุก 15s
+    task.spawn(function()
+        while task.wait(15) do
+            print(("[cac] 🛡 stats blocked=%d our_attacks=%d"):format(_G._cac_blocked, _G._cac_allowed))
+        end
+    end)
 end)
-print("🛡️ Hook ON")
 
 ----------------------------------------------------
 -- WORLD MAP (PlaceId → dataName)
