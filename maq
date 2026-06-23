@@ -223,7 +223,7 @@ elseif placeId == S_ID then
     local wpIdx = 1
     local shinrinStart = tick()
     while task.wait(0.2) do
-        if tick() - shinrinStart >= 6000 then
+        if tick() - shinrinStart >= 8000 then
             for _, item in ipairs(res:GetChildren()) do
                 if item.Value and item.Value > 0 then
                     pcall(function() sellRemote:FireServer({ Amount = item.Value, ItemName = item.Name }) end)
