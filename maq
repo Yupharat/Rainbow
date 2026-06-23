@@ -8,7 +8,28 @@ if not game:IsLoaded() then game.Loaded:Wait() end
 repeat task.wait() until Players.LocalPlayer
 local LP = Players.LocalPlayer
 repeat task.wait() until LP.Character
-task.wait(3)
+
+-- ★ รอ ClientInitiated (dump:203262) — เกมเองใช้ตัวนี้บอก "client พร้อม"
+if LP:GetAttribute("ClientInitiated") ~= true then
+    LP:GetAttributeChangedSignal("ClientInitiated"):Wait()
+end
+
+-- ★ รอ HUDGui spawn (dump:144770/144969) — UI ขึ้น = render พร้อม
+--   user observed: ตัวที่ UI ไม่ขึ้น = bug → รอตัวนี้ตัดปัญหา
+local _pg = LP:WaitForChild("PlayerGui", 60)
+if _pg then _pg:WaitForChild("HUDGui", 60) end
+
+-- ★ รอ Data folders ครบ — กัน FindFirstChild คืน nil หลังจากนี้
+repeat task.wait(0.2) until LP:FindFirstChild("Data")
+    and LP.Data:FindFirstChild("Resources")
+    and LP.Data:FindFirstChild("Worlds")
+    and LP.Data:FindFirstChild("Dragons")
+
+-- ★ รอ Workspace nodes (สำหรับ findNearestFood)
+repeat task.wait(0.2) until workspace:FindFirstChild("Interactions")
+    and workspace.Interactions:FindFirstChild("Nodes")
+
+task.wait(1)  -- final buffer
 
 local O_ID = 3475397644
 local S_ID = 125804922932357
@@ -154,22 +175,22 @@ local function findNearestFood()
     return nearest
 end
 
-local function tweenToFood(billboard, distance)
+local function tweenToFood(billboard, _)
     local root = getRoot()
     if not root or not billboard then return end
-    local target   = CFrame.new(billboard.Position + Vector3.new(0, FARM_HEIGHT, 0), billboard.Position)
-    local duration = math.clamp(distance / 800, 0.5, TWEEN_SPEED)
-    local startCF  = root.CFrame
-    local steps    = math.max(math.ceil(duration / 0.05), 1)
-    for i = 1, steps do
-        local r = getRoot()
-        if not r then break end
-        local a = math.min(i / steps, 1)
-        r.CFrame = startCF:Lerp(target, math.sin(a * math.pi / 2))
-        task.wait(0.05)
-    end
+    local target = CFrame.new(billboard.Position + Vector3.new(0, FARM_HEIGHT, 0), billboard.Position)
+
+    -- ★ instant CFrame — ไม่ผ่าน obstacle ระหว่างทาง = ไม่ติดพื้น/ภูเขา = ไม่กลิ้ง
+    --   reset velocity ก่อน+หลัง = กัน physics เก่าผลัก + dragon unseat
+    root.AssemblyLinearVelocity  = Vector3.zero
+    root.AssemblyAngularVelocity = Vector3.zero
+    root.CFrame = target
+    task.wait(0.1)
     local r = getRoot()
-    if r then r.CFrame = target end
+    if r then
+        r.AssemblyLinearVelocity  = Vector3.zero
+        r.AssemblyAngularVelocity = Vector3.zero
+    end
 end
 
 -- ★ Drop collector — อ่านจาก dump ItemDropClass (281856-282282)
@@ -257,6 +278,9 @@ elseif placeId == S_ID then
         else
             local root = getRoot()
             if root then
+                -- ★ reset velocity ก่อน CFrame jump = กันตัวกลิ้งหลัง waypoint TP
+                root.AssemblyLinearVelocity  = Vector3.zero
+                root.AssemblyAngularVelocity = Vector3.zero
                 root.CFrame = CFrame.new(waypoints[wpIdx])
             end
             wpIdx = wpIdx % #waypoints + 1
