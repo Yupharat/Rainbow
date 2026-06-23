@@ -243,6 +243,22 @@ if placeId == O_ID then
 elseif placeId == S_ID then
     local wpIdx = 1
     local shinrinStart = tick()
+
+    -- ★ Stuck detector — 300s หลังเริ่มฟาร์ม ถ้า E/K/M ไม่มีตัวใดเกิน 250 = ฟามไม่ขึ้น/ค้าง → tpShinrin
+    --   one-shot ไม่ลูป — เช็คครั้งเดียวที่ 300s
+    task.spawn(function()
+        task.wait(300)
+        local eda  = (res:FindFirstChild("Edamame")     and res.Edamame.Value)     or 0
+        local kaji = (res:FindFirstChild("KajiFruit")   and res.KajiFruit.Value)   or 0
+        local mis  = (res:FindFirstChild("MistSudachi") and res.MistSudachi.Value) or 0
+        if eda < 250 and kaji < 250 and mis < 250 then
+            print(("[main_og] ⏱ 300s แล้ว E=%d K=%d M=%d ทั้งหมด<250 → tpShinrin"):format(eda, kaji, mis))
+            tpShinrin()
+        else
+            print(("[main_og] ⏱ 300s check ผ่าน E=%d K=%d M=%d → ฟามต่อ"):format(eda, kaji, mis))
+        end
+    end)
+
     while task.wait(0.2) do
         if tick() - shinrinStart >= 4800 then
             for _, item in ipairs(res:GetChildren()) do
