@@ -42,6 +42,10 @@ local FARM_HEIGHT      = 20
 local SCAN_RADIUS      = 3000
 local MAX_KILL_WAIT    = 10
 
+-- ★ Drop-claim (ทดสอบ) — ยิง LargeNodeDropsRemote ตรง แทนรอ drop ลอยเข้าตัว (dump 122882-905)
+local USE_DIRECT_CLAIM     = true   -- true = claim ทันที, false = ใช้ magnet เดิมอย่างเดียว
+local KEEP_MAGNET_FALLBACK = true   -- เก็บ magnet กันพลาด ระหว่างเทส; ยืนยัน print แล้วตั้ง false ได้
+
 local waypoints = {
     Vector3.new(-1727.567, 587.855, -4377.845),
     Vector3.new(-732.746,  864.955, -5321.730),
@@ -193,29 +197,68 @@ local function tweenToFood(billboard, _)
     end
 end
 
--- ★ Drop collector — อ่านจาก dump ItemDropClass (281856-282282)
---   - drops parent ใน workspace.Camera (line 281976)
---   - Model name = item name (Apple/Pumpkin/Edamame/KajiFruit/MistSudachi ฯลฯ) ไม่ใช่ "Food"
---   - PrimaryPart.CanTouch=true หลัง burst animation จบ (~0.6s, line 282127)
---   - collection trigger ผ่าน Touched + IsLocalPlayerFromTouched (line 282128-282141)
---   - CFrame ต้องเปลี่ยน 2 ครั้ง (สลับ offset) เพื่อให้ Touched fire — set ครั้งเดียวบางทีไม่ติด
-task.spawn(function()
-    local cam = workspace.CurrentCamera
-    local toggle = false
-    while task.wait(COLLECT_INTERVAL) do
-        local root = getRoot()
-        if root then
-            toggle = not toggle
-            local off = toggle and Vector3.new(0, 2, 0) or Vector3.new(0, -2, 0)
-            local targetCF = root.CFrame + off
-            for _, item in ipairs(cam:GetChildren()) do
-                if item:IsA("Model") and item.PrimaryPart and item.PrimaryPart.CanTouch then
-                    pcall(function() item.PrimaryPart.CFrame = targetCF end)
+-- ★ Instant drop-claim (dump 122882-905 = โค้ด client ของเกมเอง) — ยิง LargeNodeDropsRemote:FireServer
+--   ทันทีที่ server push drop list มา ข้าม u10.new (drop ลอยเข้าตัว + รอ touch + รอ DropPositions ≤4s)
+--   server (122828-880) เช็คแค่ node registered + Rewards[เรา][phase][index] มีจริง → echo arg เดิม = ผ่านแน่
+--   122869 set nil กันซ้ำ → race-safe กับ handler เดิมของเกม + magnet ด้านล่าง (ยิงซ้ำ = server เมิน ไม่ error)
+local claimStat = { events = 0, fires = 0 }
+if USE_DIRECT_CLAIM then
+    local dropsRemote = remotes and remotes:WaitForChild("LargeNodeDropsRemote", 10)
+    if dropsRemote then
+        dropsRemote.OnClientEvent:Connect(function(node, phase, dropsTable)
+            if typeof(node) ~= "Instance" or type(phase) ~= "number" or type(dropsTable) ~= "table" then
+                return
+            end
+            claimStat.events = claimStat.events + 1
+            local n = 0
+            for index in pairs(dropsTable) do
+                if type(index) == "number" then
+                    pcall(function() dropsRemote:FireServer(node, phase, index) end)
+                    claimStat.fires = claimStat.fires + 1
+                    n = n + 1
+                    if n % 8 == 0 then task.wait() end   -- stagger กัน rate-limit ตอน cluster ใหญ่
+                end
+            end
+        end)
+        -- diagnostic: ยืนยัน claim ติดจริง + resource ขึ้น (ลบ block นี้ได้หลังเทสผ่าน)
+        task.spawn(function()
+            while task.wait(5) do
+                local e = (res:FindFirstChild("Edamame") and res.Edamame.Value) or 0
+                local k = (res:FindFirstChild("KajiFruit") and res.KajiFruit.Value) or 0
+                local m = (res:FindFirstChild("MistSudachi") and res.MistSudachi.Value) or 0
+                print(("[dropclaim] events=%d fires=%d | E=%d K=%d M=%d"):format(
+                    claimStat.events, claimStat.fires, e, k, m))
+            end
+        end)
+        print("[dropclaim] hooked LargeNodeDropsRemote — direct-claim ON")
+    else
+        warn("[dropclaim] ไม่เจอ LargeNodeDropsRemote → magnet fallback อย่างเดียว")
+    end
+end
+
+-- ★ Drop collector (magnet) — fallback: เก็บ drop ที่ direct-claim ไม่ครอบคลุม / drop ที่ไม่ใช่ LargeNode
+--   อ่านจาก dump ItemDropClass (281856-282282): drops parent ใน workspace.Camera (281976),
+--   Model name = item name, PrimaryPart.CanTouch=true หลัง burst (~0.6s, 282127),
+--   collection ผ่าน Touched (282128-141), CFrame สลับ 2 ครั้งให้ Touched fire
+if KEEP_MAGNET_FALLBACK then
+    task.spawn(function()
+        local cam = workspace.CurrentCamera
+        local toggle = false
+        while task.wait(COLLECT_INTERVAL) do
+            local root = getRoot()
+            if root then
+                toggle = not toggle
+                local off = toggle and Vector3.new(0, 2, 0) or Vector3.new(0, -2, 0)
+                local targetCF = root.CFrame + off
+                for _, item in ipairs(cam:GetChildren()) do
+                    if item:IsA("Model") and item.PrimaryPart and item.PrimaryPart.CanTouch then
+                        pcall(function() item.PrimaryPart.CFrame = targetCF end)
+                    end
                 end
             end
         end
-    end
-end)
+    end)
+end
 
 task.spawn(function()
     local char   = LP.Character
