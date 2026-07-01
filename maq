@@ -44,7 +44,7 @@ local MAX_KILL_WAIT    = 10
 
 -- ★ Drop-claim (ทดสอบ) — ยิง LargeNodeDropsRemote ตรง แทนรอ drop ลอยเข้าตัว (dump 122882-905)
 local USE_DIRECT_CLAIM     = true   -- true = claim ทันที, false = ใช้ magnet เดิมอย่างเดียว
-local KEEP_MAGNET_FALLBACK = true   -- เก็บ magnet กันพลาด ระหว่างเทส; ยืนยัน print แล้วตั้ง false ได้
+local KEEP_MAGNET_FALLBACK = false   -- เก็บ magnet กันพลาด ระหว่างเทส; ยืนยัน print แล้วตั้ง false ได้
 
 local waypoints = {
     Vector3.new(-1727.567, 587.855, -4377.845),
